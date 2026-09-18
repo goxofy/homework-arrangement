@@ -1,23 +1,53 @@
 {
   "expo": {
-    "name": "homework-app",
+    "name": "今日作业",
     "slug": "homework-app",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "homework",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.family.homeworkapp",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "用于录制语音作业并自动转为文字,方便家长布置作业。",
+        "NSSpeechRecognitionUsageDescription": "用于把您说的话转成作业文字。"
+      }
     },
     "android": {
+      "package": "com.family.homeworkapp",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ],
+      "speech": {
+        "enabled": true
+      }
     },
+    "plugins": [
+      "expo-speech-recognition",
+      "expo-audio",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.4"
+          },
+          "android": {
+            "minSdkVersion": 24
+          }
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     }

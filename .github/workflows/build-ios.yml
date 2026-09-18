@@ -1,0 +1,84 @@
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'homework-app/**'
+      - '!homework-app/README.md'
+      - '.github/workflows/build-ios.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: homework-app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 修复 CocoaPods 头文件生成时 MACOSX_DEPLOYMENT_TARGET 检查警告
+      - name: Fix deployment target for pod build
+        run: echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: |
+          npm i -g bun
+          bun install --frozen-lockfile
+
+      - name: Generate native iOS project (prebuild)
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install pods
+        run: |
+          cd ios
+          pod install
+
+      - name: Show available schemes
+        run: xcodebuild -workspace ios/app.xcworkspace -list
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild -workspace ios/app.xcworkspace \
+            -scheme app \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/app.xcarchive \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Export unsigned IPA
+        run: |
+          mkdir -p dist
+          APP_PATH=$(find build/app.xcarchive/Products/Applications -maxdepth 1 -name '*.app' | head -n 1)
+          echo "App bundle: $APP_PATH"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          cd build
+          zip -qry ../dist/homework-unsigned.ipa Payload
+          cd ..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: homework-ios-unsigned-ipa
+          path: homework-app/dist/homework-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Attach to Release (tag push only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: homework-app/dist/homework-unsigned.ipa
