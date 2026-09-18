@@ -19,6 +19,7 @@ export interface Task {
   subject_name: string | null;
   subject_color: string | null;
   content: string;
+  done: boolean;
   has_audio: boolean;
   audio_url: string | null;
   audio_mime: string | null;
@@ -33,6 +34,7 @@ export interface Identity {
   server: string;
 }
 
+const KEY_DISPLAY = '@homework/display';
 const KEY_IDENTITY = '@homework/identity';
 const KEY_ONBOARDED = '@homework/onboarded';
 const KEY_SERVER_HINT = '@homework/server-hint'; // 欢迎页预填的服务器地址
@@ -50,6 +52,39 @@ export async function loadIdentity(): Promise<Identity | null> {
 export async function saveIdentity(identity: Identity): Promise<void> {
   await AsyncStorage.setItem(KEY_IDENTITY, JSON.stringify(identity));
   await AsyncStorage.setItem(KEY_ONBOARDED, '1');
+}
+
+/** 显示偏好:字号档位 + 行间距紧凑度(家长/儿童共用一套) */
+export type FontStep = 'sm' | 'md' | 'lg' | 'xl';
+export type Density = 'compact' | 'normal' | 'cozy';
+
+export interface DisplayPrefs {
+  fontStep: FontStep;
+  density: Density;
+}
+
+export const DEFAULT_DISPLAY: DisplayPrefs = { fontStep: 'md', density: 'normal' };
+
+export async function loadDisplayPrefs(): Promise<DisplayPrefs> {
+  try {
+    const raw = await AsyncStorage.getItem(KEY_DISPLAY);
+    if (!raw) return DEFAULT_DISPLAY;
+    const parsed = JSON.parse(raw) as Partial<DisplayPrefs>;
+    return {
+      fontStep: parsed.fontStep ?? DEFAULT_DISPLAY.fontStep,
+      density: parsed.density ?? DEFAULT_DISPLAY.density,
+    };
+  } catch {
+    return DEFAULT_DISPLAY;
+  }
+}
+
+export async function saveDisplayPrefs(prefs: DisplayPrefs): Promise<void> {
+  try {
+    await AsyncStorage.setItem(KEY_DISPLAY, JSON.stringify(prefs));
+  } catch {
+    /* 存不上也不影响本次使用 */
+  }
 }
 
 export async function clearIdentity(): Promise<void> {

@@ -206,13 +206,11 @@ app.put('/api/rooms/:code/tasks/:tid', (req, res) => {
     if (!subject) return badRequest(res, '分组不存在');
     subjectId = subject.id;
   }
-  db.prepare('UPDATE tasks SET content = ?, subject_id = ?, updated_at = ? WHERE room_code = ? AND id = ?').run(
-    text,
-    subjectId,
-    now(),
-    code,
-    req.params.tid
-  );
+  // 完成状态:家长/儿童两端都可以勾选,只传 done 时不动内容
+  const done = typeof req.body?.done === 'boolean' ? (req.body.done ? 1 : 0) : task.done ? 1 : 0;
+  db.prepare(
+    'UPDATE tasks SET content = ?, subject_id = ?, done = ?, updated_at = ? WHERE room_code = ? AND id = ?'
+  ).run(text, subjectId, done, now(), code, req.params.tid);
   broadcast(code, { type: 'tasks_changed', date: task.for_date });
   res.json({ ok: true });
 });

@@ -67,6 +67,12 @@ export function dayOfMonth(dateStr: string): number {
   return parseDate(dateStr).getDate();
 }
 
+/** 时间戳 → 布置时间 HH:MM */
+export function formatTime(ts: number): string {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /** 儿童端只允许查看 今天(含)以前的日期 */
 export function isFuture(dateStr: string): boolean {
   return dateStr > todayStr();

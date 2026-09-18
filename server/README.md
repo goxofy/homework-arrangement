@@ -132,6 +132,20 @@ tar czf homework-backup-$(date +%F).tar.gz data/
 
 SQLite 已开 WAL 模式,备份前最好停服务或用 `sqlite3 data/homework.db ".backup ..."`。
 
+### 版本升级(数据不丢)
+
+直接覆盖代码后重启服务即可,**不需要手动跑迁移**:
+
+- 建表用的是 `CREATE TABLE IF NOT EXISTS`,老库不会被重建;
+- 新增字段(如 v1.1 的任务完成状态 `tasks.done`)启动时会自动 `ALTER TABLE ... ADD COLUMN` 补上,老任务默认为「未完成」。
+
+升级前想先验证一下迁移逻辑,可以跑自带的检查脚本(不会动 `data/`,它用 `/tmp` 里的模拟老库):
+
+```bash
+cd server && node test-migrate.mjs
+# ✅ 老库自动补列:通过(老任务 done=false,内容完整)
+```
+
 ## 八、运维小工具
 
 ```
@@ -144,3 +158,4 @@ GET /api/stats    -> 房间数/任务数/语音占用   容量统计
 - 房间号即唯一凭据(8-32 位),请使用不易猜的房间号;接口按房间号隔离数据
 - 服务端目前未做速率限制;如暴露公网,建议 Nginx 层加 `limit_req`
 - 语音文件上限 15MB/条,单条任务文字上限 500 字,服务端会校验
+- 任务的「完成状态」是可写的,家长和儿童端都可以勾选(`PUT /api/rooms/:code/tasks/:tid` 带 `{done:true|false}`);作业内容的编辑/删除客户端只有家长端有入口

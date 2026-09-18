@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   CONTENT_MAX_WIDTH,
+  DoneCircle,
   Empty,
   GroupHeader,
   Overlay,
@@ -16,10 +17,15 @@ import {
   WeekNav,
 } from '../ui';
 import { colors, spacing } from '../theme';
+import { useDisplay } from '../display';
 import { useApp } from '../AppContext';
-import { displayDate, todayStr } from '../dates';
+import { displayDate, formatTime, todayStr } from '../dates';
+import { TaskDetail } from '../TaskDetail';
 import type { Subject, Task } from '../storage';
 import { useSpeechRecognition } from '../speech';
+
+/** 内容超过这个长度就在任务行末尾显示一个「›」,提示可以点开看全文 */
+const LONG_CONTENT_HINT = 18;
 
 export default function ParentHomeScreen({
   onOpenSubjects,
@@ -37,17 +43,21 @@ export default function ParentHomeScreen({
     addTask,
     editTask,
     removeTask,
+    setTaskDone,
     refreshTasks,
   } = useApp();
   const insets = useSafeAreaInsets();
+  const { fs, vs, lh } = useDisplay();
 
   const [date, setDate] = useState(todayStr());
   const [addOpen, setAddOpen] = useState(false);
   const [presetSubjectId, setPresetSubjectId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Task | null>(null);
+  const [detailOf, setDetailOf] = useState<Task | null>(null);
 
   const tasks = tasksByDate[date] ?? [];
   const loading = !!loadingDates[date];
+  const doneCount = tasks.filter((t) => t.done).length;
 
   // 用 ref 拿最新的 refreshTasks,避免把它的身份写进依赖(它会随数据变化而变,否则会无限刷新)
   const refreshRef = useRef(refreshTasks);
@@ -71,7 +81,8 @@ export default function ParentHomeScreen({
     return map;
   }, [activeSubjects, tasks]);
 
-  // 分组内不再放小「+ 添加」按钮(底部的大按钮 + 弹层里选分组即可)
+  const subjectName = (sid: string) => subjects.find((s) => s.id === sid)?.name ?? '其他';
+
   const openAdd = () => {
     setPresetSubjectId(null);
     setAddOpen(true);
@@ -79,39 +90,43 @@ export default function ParentHomeScreen({
 
   const isTodayDate = date === todayStr();
 
+  // 详情里点「编辑」:关掉详情再开编辑弹层
+  const openEditFromDetail = (task: Task) => {
+    setDetailOf(null);
+    setEditing(task);
+  };
+
   return (
     // 根节点不加安全区 padding,弹层(Overlay)才能覆盖整个屏幕
     <View style={s.root}>
       <View style={{ paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }}>
         {/* 大屏(横屏 iPad)下与列表保持同样的居中宽度 */}
         <View style={s.headerInner}>
-        {/* 顶部栏:分组 / 设置 是唯一入口(底部不再重复一个「分组配置」) */}
-        <View style={s.topbar}>
-          <View style={{ flex: 1, paddingRight: spacing(1) }}>
-            <Text style={s.topTitle} numberOfLines={1}>
-              今日作业
-            </Text>
-            <Text style={s.topSub} numberOfLines={1}>
-              家长端 · 房间 {identity?.roomCode ?? '-'}
-            </Text>
+          {/* 顶部栏:分组 / 设置 是唯一入口(底部不再重复一个「分组配置」) */}
+          <View style={s.topbar}>
+            <View style={{ flex: 1, paddingRight: spacing(1) }}>
+              <Text style={[s.topTitle, { fontSize: fs(24) }]} numberOfLines={1}>
+                今日作业
+              </Text>
+              <Text style={[s.topSub, { fontSize: fs(13) }]} numberOfLines={1}>
+                家长端 · 房间 {identity?.roomCode ?? '-'}
+              </Text>
+            </View>
+            <Pressable style={s.topBtn} onPress={onOpenSubjects}>
+              <Text style={[s.topBtnText, { fontSize: fs(14) }]}>分组</Text>
+            </Pressable>
+            <Pressable style={s.topBtn} onPress={onOpenSettings}>
+              <Text style={[s.topBtnText, { fontSize: fs(14) }]}>设置</Text>
+            </Pressable>
           </View>
-          <Pressable style={s.topBtn} onPress={onOpenSubjects}>
-            <Text style={s.topBtnText}>分组</Text>
-          </Pressable>
-          <Pressable style={s.topBtn} onPress={onOpenSettings}>
-            <Text style={s.topBtnText}>设置</Text>
-          </Pressable>
-        </View>
-        {!connected && (
-          <Text style={s.offline}>● 未连接同步服务,改动可能不同步到孩子设备</Text>
-        )}
+          {!connected && (
+            <Text style={[s.offline, { fontSize: fs(12) }]}>
+              ● 未连接同步服务,改动可能不同步到孩子设备
+            </Text>
+          )}
 
-        {/* 周导航:家长端也能翻阅历史(和儿童端一致,不能翻到未来) */}
-        <WeekNav
-          date={date}
-          onChange={changeDate}
-          marks={(d) => (tasksByDate[d]?.length ?? 0) > 0}
-        />
+          {/* 周导航:家长端也能翻阅历史(和儿童端一致,不能翻到未来) */}
+          <WeekNav date={date} onChange={changeDate} marks={(d) => (tasksByDate[d]?.length ?? 0) > 0} />
         </View>
       </View>
 
@@ -130,12 +145,19 @@ export default function ParentHomeScreen({
             const list = grouped.get(sub.id) ?? [];
             if (list.length === 0) return null;
             return (
-              <View key={sub.id} style={{ marginBottom: spacing(1.5) }}>
-                <GroupHeader name={sub.name} color={sub.color} count={list.length} />
+              <View key={sub.id} style={{ marginBottom: vs(12) }}>
+                <GroupHeader
+                  name={sub.name}
+                  color={sub.color}
+                  count={list.length}
+                  doneCount={list.filter((t) => t.done).length}
+                />
                 {list.map((t) => (
                   <TaskRow
                     key={t.id}
                     task={t}
+                    onOpen={() => setDetailOf(t)}
+                    onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
                     onEdit={() => setEditing(t)}
                     onDelete={() =>
                       Alert.alert('删除任务', '确定删除这条作业吗?', [
@@ -154,8 +176,9 @@ export default function ParentHomeScreen({
           })
         )}
         {tasks.length > 0 && (
-          <Text style={s.totalHint}>
-            共 {tasks.length} 条作业 · 孩子的 iPad 上会实时更新
+          <Text style={[s.totalHint, { fontSize: fs(12) }]}>
+            共 {tasks.length} 条作业
+            {doneCount > 0 ? ` · 已完成 ${doneCount}` : ''} · 孩子的 iPad 上会实时更新
           </Text>
         )}
       </Screen>
@@ -202,42 +225,74 @@ export default function ParentHomeScreen({
           setEditing(null);
         }}
       />
+
+      {/* 详情弹层:点任务文字进来,看完整内容 / 勾选完成 / 编辑 / 删除 */}
+      {detailOf && (
+        <TaskDetail
+          task={detailOf}
+          subjectName={subjectName(detailOf.subject_id)}
+          subjectColor={detailOf.subject_color}
+          date={date}
+          onClose={() => setDetailOf(null)}
+          onEdit={() => openEditFromDetail(detailOf)}
+          onDelete={() => removeTask(detailOf.id, date).catch(() => {})}
+        />
+      )}
     </View>
   );
 }
 
 /**
- * 家长端任务行:单行紧凑布局(内容 + 时间 + 编辑/删除 都在一行),
- * 不再重复显示分组名 —— 分组名已经在上面的分组标题里了。
+ * 家长端任务行:单行紧凑布局。
+ * 左侧勾选圈(完成删除线)、中间内容(点开看全文)、右侧时间与编辑/删除。
  */
 export function TaskRow({
   task,
+  onOpen,
+  onToggle,
   onEdit,
   onDelete,
   readOnly,
 }: {
   task: Task;
+  onOpen?: () => void;
+  onToggle?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
   readOnly?: boolean;
 }) {
-  const d = new Date(task.created_at);
-  const time = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+  const { fs, vs } = useDisplay();
+  const long = task.content.length > LONG_CONTENT_HINT;
 
   return (
-    <View style={s.taskRow}>
-      <Text style={s.taskText} numberOfLines={1}>
-        {task.content}
-      </Text>
-      {task.has_audio && <Text style={s.audioTag}>🎵</Text>}
-      <Text style={s.timeText}>{time}</Text>
+    <View
+      style={[
+        s.taskRow,
+        { paddingVertical: vs(8), marginBottom: vs(5) },
+        task.done && { backgroundColor: '#FAFBFD' },
+      ]}>
+      <DoneCircle done={task.done} onPress={onToggle ?? (() => {})} />
+      <Pressable style={s.taskTextWrap} onPress={onOpen} hitSlop={6}>
+        <Text
+          style={[
+            s.taskText,
+            { fontSize: fs(15) },
+            task.done && { color: colors.textSub, textDecorationLine: 'line-through' },
+          ]}
+          numberOfLines={1}>
+          {task.content}
+        </Text>
+      </Pressable>
+      {long && <Text style={[s.moreHint, { fontSize: fs(13) }]}>›</Text>}
+      {task.has_audio && <Text style={{ fontSize: fs(12) }}>🎵</Text>}
+      <Text style={[s.timeText, { fontSize: fs(11) }]}>{formatTime(task.created_at)}</Text>
       {!readOnly && (
         <View style={s.taskActions}>
           <Pressable onPress={onEdit} hitSlop={10}>
-            <Text style={s.editBtn}>编辑</Text>
+            <Text style={[s.editBtn, { fontSize: fs(13) }]}>编辑</Text>
           </Pressable>
           <Pressable onPress={onDelete} hitSlop={10}>
-            <Text style={s.delBtn}>删除</Text>
+            <Text style={[s.delBtn, { fontSize: fs(13) }]}>删除</Text>
           </Pressable>
         </View>
       )}
@@ -269,6 +324,7 @@ export function AddTaskModal({
   onClose: () => void;
   onSubmit: (payload: { date: string; subject_id: string; content: string }) => Promise<void>;
 }) {
+  const { fs, lh } = useDisplay();
   const [subjectId, setSubjectId] = useState<string>(initial?.subject_id || subjects[0]?.id || '');
   const [content, setContent] = useState(initial?.content ?? '');
   const [busy, setBusy] = useState(false);
@@ -332,7 +388,7 @@ export function AddTaskModal({
       }>
       <Screen>
         <Card style={{ gap: spacing(2) }}>
-          <Text style={s.label}>选择分组</Text>
+          <Text style={[s.label, { fontSize: fs(14) }]}>选择分组</Text>
           <View style={s.chipWrap}>
             {subjects.map((sub) => {
               const active = sub.id === subjectId;
@@ -347,16 +403,18 @@ export function AddTaskModal({
                       borderColor: sub.color ?? colors.primary,
                     },
                   ]}>
-                  <Text style={[s.chipText, active && { color: '#fff' }]}>{sub.name}</Text>
+                  <Text style={[s.chipText, { fontSize: fs(14) }, active && { color: '#fff' }]}>
+                    {sub.name}
+                  </Text>
                 </Pressable>
               );
             })}
           </View>
 
-          <Text style={s.label}>作业内容</Text>
+          <Text style={[s.label, { fontSize: fs(14) }]}>作业内容</Text>
           {/* 输入框放在页面靠上位置:键盘弹出也不会遮住 */}
           <TextInput
-            style={[s.input, { minHeight: 100 }]}
+            style={[s.input, { minHeight: 100, fontSize: fs(16) }]}
             value={content}
             onChangeText={setContent}
             multiline
@@ -368,15 +426,23 @@ export function AddTaskModal({
             <View style={s.voiceBox}>
               {speech.recognizing ? (
                 <>
-                  <Text style={s.voiceHint}>🎙️ 正在聆听…说完点「完成」,文字会追加到上面输入框</Text>
-                  {!!speech.transcript && <Text style={s.voiceLive}>{speech.transcript}</Text>}
+                  <Text style={[s.voiceHint, { fontSize: fs(13) }]}>
+                    🎙️ 正在聆听…说完点「完成」,文字会追加到上面输入框
+                  </Text>
+                  {!!speech.transcript && (
+                    <Text style={[s.voiceLive, { fontSize: fs(14), lineHeight: lh(14) }]}>
+                      {speech.transcript}
+                    </Text>
+                  )}
                   <Button title="完成" variant="soft" small onPress={speech.stop} style={{ alignSelf: 'center' }} />
                 </>
               ) : (
                 <Button title="🎤 说话转文字(可选)" variant="soft" onPress={startSpeech} />
               )}
               {speech.error && <Text style={s.error}>{speech.error}</Text>}
-              <Text style={s.hint}>直接打字即可;语音只是辅助,识别结果保存前可任意修改。</Text>
+              <Text style={[s.hint, { fontSize: fs(12) }]}>
+                直接打字即可;语音只是辅助,识别结果保存前可任意修改。
+              </Text>
             </View>
           )}
 
@@ -401,7 +467,6 @@ const s = StyleSheet.create({
   },
   topTitle: { fontSize: 24, fontWeight: '800', color: colors.text },
   topSub: { fontSize: 13, color: colors.textSub, marginTop: 2 },
-  topBtns: { flexDirection: 'row', gap: spacing(1) },
   topBtn: {
     paddingHorizontal: spacing(1.5),
     paddingVertical: spacing(1),
@@ -421,22 +486,22 @@ const s = StyleSheet.create({
   taskRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing(0.8),
+    gap: spacing(0.9),
     backgroundColor: colors.card,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     paddingHorizontal: spacing(1.5),
-    paddingVertical: spacing(1),
-    marginBottom: spacing(0.6),
   },
-  taskText: { flex: 1, fontSize: 15, color: colors.text },
+  taskTextWrap: { flex: 1 },
+  taskText: { fontSize: 15, color: colors.text },
+  moreHint: { color: colors.textSub },
   audioTag: { fontSize: 12 },
   timeText: { fontSize: 11, color: colors.textSub },
   taskActions: { flexDirection: 'row', alignItems: 'center', gap: spacing(0.9) },
   editBtn: { color: colors.primary, fontSize: 13, fontWeight: '600' },
   delBtn: { color: colors.danger, fontSize: 13, fontWeight: '600' },
-  totalHint: { textAlign: 'center', color: colors.textSub, fontSize: 12, marginTop: spacing(1) },
+  totalHint: { textAlign: 'center', color: colors.textSub, marginTop: spacing(1) },
   bottomBar: {
     paddingTop: spacing(2),
     borderTopWidth: StyleSheet.hairlineWidth,

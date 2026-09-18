@@ -1,15 +1,20 @@
-// 儿童端首页(iPad 为主):当日作业大字显示、语音播放、历史日期回查(只读)。
+// 儿童端首页(iPad 为主):当日作业大字显示、语音播放、历史日期回查(只读布置,但可勾选完成)。
 
 import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { Card, CONTENT_MAX_WIDTH, Empty, GroupHeader, Screen, WeekNav } from '../ui';
+import { Card, CONTENT_MAX_WIDTH, DoneCircle, Empty, GroupHeader, Screen, WeekNav } from '../ui';
 import { colors, spacing } from '../theme';
+import { useDisplay } from '../display';
 import { useApp } from '../AppContext';
 import { displayDate, isToday, todayStr } from '../dates';
+import { TaskDetail } from '../TaskDetail';
 import type { Subject, Task } from '../storage';
 import SettingsScreen from './SettingsScreen';
+
+/** 内容超过这个长度就在任务行末尾显示一个「›」,提示可以点开看全文 */
+const LONG_CONTENT_HINT = 18;
 
 export default function ChildHomeScreen() {
   const {
@@ -18,14 +23,17 @@ export default function ChildHomeScreen() {
     tasksByDate,
     loadingDates,
     connected,
+    setTaskDone,
     refreshTasks,
     updateIdentity,
     signOut,
   } = useApp();
   const insets = useSafeAreaInsets();
+  const { fs, vs } = useDisplay();
 
   const [date, setDate] = useState(todayStr());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [detailOf, setDetailOf] = useState<Task | null>(null);
 
   const tasks = tasksByDate[date] ?? [];
   const loading = !!loadingDates[date];
@@ -59,6 +67,10 @@ export default function ChildHomeScreen() {
   }, [subjects, tasks]);
 
   const total = tasks.length;
+  const doneCount = tasks.filter((t) => t.done).length;
+
+  const subjectNameOf = (t: Task) =>
+    subjects.find((s) => s.id === t.subject_id)?.name ?? t.subject_name ?? '其他';
 
   return (
     // 根节点不加安全区 padding,设置弹层才能覆盖整个屏幕
@@ -66,27 +78,25 @@ export default function ChildHomeScreen() {
       <View style={{ paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }}>
         {/* 大屏(横屏 iPad)下与列表保持同样的居中宽度 */}
         <View style={s.headerInner}>
-        <View style={s.topbar}>
-          <View style={{ flex: 1, paddingRight: spacing(1) }}>
-            <Text style={s.topTitle} numberOfLines={1}>
-              今日作业
-            </Text>
-            <Text style={s.topSub} numberOfLines={1}>
-              儿童端 · 房间 {identity?.roomCode ?? '-'}
-            </Text>
+          <View style={s.topbar}>
+            <View style={{ flex: 1, paddingRight: spacing(1) }}>
+              <Text style={[s.topTitle, { fontSize: fs(24) }]} numberOfLines={1}>
+                今日作业
+              </Text>
+              <Text style={[s.topSub, { fontSize: fs(13) }]} numberOfLines={1}>
+                儿童端 · 房间 {identity?.roomCode ?? '-'}
+              </Text>
+            </View>
+            {/* 设置:带文字的按钮,离屏幕边缘留出安全区,不再是贴边的小齿轮 */}
+            <Pressable style={s.topBtn} onPress={() => setSettingsOpen(true)}>
+              <Text style={[s.topBtnText, { fontSize: fs(15) }]}>设置</Text>
+            </Pressable>
           </View>
-          {/* 设置:带文字的按钮,离屏幕边缘留出安全区,不再是贴边的小齿轮 */}
-          <Pressable style={s.topBtn} onPress={() => setSettingsOpen(true)}>
-            <Text style={s.topBtnText}>设置</Text>
-          </Pressable>
-        </View>
-        {!connected && <Text style={s.offline}>● 未连接同步服务,内容可能不是最新的</Text>}
+          {!connected && (
+            <Text style={[s.offline, { fontSize: fs(12) }]}>● 未连接同步服务,内容可能不是最新的</Text>
+          )}
 
-        <WeekNav
-          date={date}
-          onChange={changeDate}
-          marks={(d) => (tasksByDate[d]?.length ?? 0) > 0}
-        />
+          <WeekNav date={date} onChange={changeDate} marks={(d) => (tasksByDate[d]?.length ?? 0) > 0} />
         </View>
       </View>
 
@@ -100,16 +110,30 @@ export default function ChildHomeScreen() {
           </Card>
         ) : (
           grouped.map(({ subject, tasks: list }) => (
-            <View key={subject.id} style={{ marginBottom: spacing(1.5) }}>
-              <GroupHeader name={subject.name} color={subject.color} count={list.length} />
+            <View key={subject.id} style={{ marginBottom: vs(12) }}>
+              <GroupHeader
+                name={subject.name}
+                color={subject.color}
+                count={list.length}
+                doneCount={list.filter((t) => t.done).length}
+              />
               {list.map((t) => (
-                <ChildTaskCard key={t.id} task={t} server={identity?.server ?? ''} />
+                <ChildTaskCard
+                  key={t.id}
+                  task={t}
+                  server={identity?.server ?? ''}
+                  onOpen={() => setDetailOf(t)}
+                  onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
+                />
               ))}
             </View>
           ))
         )}
         {total > 0 && (
-          <Text style={s.footerHint}>{isToday(date) ? '今天的作业' : `${displayDate(date)} 的作业`}</Text>
+          <Text style={[s.footerHint, { fontSize: fs(12) }]}>
+            {isToday(date) ? '今天的作业' : `${displayDate(date)} 的作业`}
+            {doneCount > 0 ? ` · 已完成 ${doneCount}/${total}` : ''} · 做到哪条就打勾 ✅
+          </Text>
         )}
       </Screen>
 
@@ -120,24 +144,96 @@ export default function ChildHomeScreen() {
           onSignOut={signOut}
         />
       )}
+
+      {/* 详情弹层:点任务文字看完整内容 / 勾选完成 / 播放语音 */}
+      {detailOf && (
+        <TaskDetail
+          task={detailOf}
+          subjectName={subjectNameOf(detailOf)}
+          subjectColor={detailOf.subject_color}
+          date={date}
+          onClose={() => setDetailOf(null)}
+          footer={
+            detailOf.has_audio && detailOf.audio_url ? (
+              <AudioRow uri={`${identity?.server ?? ''}${detailOf.audio_url}`} />
+            ) : undefined
+          }
+        />
+      )}
     </View>
   );
 }
 
-/** 儿童端任务卡:单行(内容 + 语音按钮),一屏能看更多条 */
-function ChildTaskCard({ task, server }: { task: Task; server: string }) {
+/** 儿童端任务卡:单行(勾选圈 + 内容 + 语音按钮),一屏能看更多条 */
+function ChildTaskCard({
+  task,
+  server,
+  onOpen,
+  onToggle,
+}: {
+  task: Task;
+  server: string;
+  onOpen: () => void;
+  onToggle: () => void;
+}) {
+  const { fs, vs } = useDisplay();
+  const long = task.content.length > LONG_CONTENT_HINT;
+
   return (
-    <View style={s.taskCard}>
-      <Text style={s.taskText} numberOfLines={1}>
-        {task.content}
-      </Text>
+    <View
+      style={[
+        s.taskCard,
+        { paddingVertical: vs(8), marginBottom: vs(5) },
+        task.done && { backgroundColor: '#FAFBFD' },
+      ]}>
+      <DoneCircle done={task.done} onPress={onToggle} />
+      <Pressable style={{ flex: 1 }} onPress={onOpen} hitSlop={6} accessibilityRole="button">
+        <Text
+          style={[
+            s.taskText,
+            { fontSize: fs(17) },
+            task.done && { color: colors.textSub, textDecorationLine: 'line-through' },
+          ]}
+          numberOfLines={1}>
+          {task.content}
+        </Text>
+      </Pressable>
+      {long && <Text style={[s.moreHint, { fontSize: fs(15) }]}>›</Text>}
       {task.has_audio && task.audio_url && <AudioButton uri={`${server}${task.audio_url}`} />}
     </View>
   );
 }
 
+/** 详情弹层里的语音播放:一行「播放/暂停 + 说明」 */
+export function AudioRow({ uri }: { uri: string }) {
+  const player = useAudioPlayer(uri);
+  const status = useAudioPlayerStatus(player);
+  const { fs } = useDisplay();
+
+  const toggle = () => {
+    if (status.playing) {
+      player.pause();
+      return;
+    }
+    const finished = status.didJustFinish || (status.duration > 0 && status.currentTime >= status.duration - 0.1);
+    if (finished) player.seekTo(0).catch(() => {});
+    player.play();
+  };
+
+  return (
+    <Pressable style={s.audioRow} onPress={toggle} accessibilityRole="button">
+      <View style={s.audioBtn}>
+        <Text style={s.audioBtnIcon}>{status.playing ? '⏸' : '▶'}</Text>
+      </View>
+      <Text style={[s.audioRowText, { fontSize: fs(15) }]}>
+        {status.playing ? '正在播放家长录的语音…' : '播放家长录的语音'}
+      </Text>
+    </Pressable>
+  );
+}
+
 /** 语音播放按钮:只在真的有语音的任务上挂载播放器,避免每个卡片都订阅播放状态 */
-function AudioButton({ uri }: { uri: string }) {
+export function AudioButton({ uri }: { uri: string }) {
   const player = useAudioPlayer(uri);
   const status = useAudioPlayerStatus(player);
 
@@ -202,10 +298,9 @@ const s = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     paddingHorizontal: spacing(1.5),
-    paddingVertical: spacing(1),
-    marginBottom: spacing(0.6),
   },
-  taskText: { flex: 1, fontSize: 17, color: colors.text },
+  taskText: { fontSize: 17, color: colors.text },
+  moreHint: { color: colors.textSub },
   audioBtn: {
     width: 34,
     height: 34,
@@ -215,5 +310,7 @@ const s = StyleSheet.create({
     backgroundColor: colors.primarySoft,
   },
   audioBtnIcon: { color: colors.primaryDark, fontSize: 14, fontWeight: '700' },
-  footerHint: { textAlign: 'center', color: colors.textSub, fontSize: 12, marginTop: spacing(1) },
+  audioRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.5) },
+  audioRowText: { color: colors.primaryDark, fontWeight: '600' },
+  footerHint: { textAlign: 'center', color: colors.textSub, marginTop: spacing(1) },
 });

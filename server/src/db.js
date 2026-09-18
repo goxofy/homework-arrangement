@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   for_date    TEXT NOT NULL,
   subject_id  TEXT NOT NULL,
   content     TEXT NOT NULL,
+  done        INTEGER NOT NULL DEFAULT 0,
   audio_path  TEXT,
   audio_mime  TEXT,
   audio_size  INTEGER,
@@ -50,6 +51,19 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_room_date    ON tasks (room_code, for_date);
 CREATE INDEX IF NOT EXISTS idx_subjects_room_sort ON subjects (room_code, sort_order);
 `);
+
+/**
+ * 老库补列:SQLite 支持 ADD COLUMN,已存在则跳过。
+ * 这样升级服务端不需要手动跑迁移,直接覆盖代码重启即可(数据不丢)。
+ */
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+
+// v1.1 新增:任务完成状态(0/1)
+ensureColumn('tasks', 'done', 'done INTEGER NOT NULL DEFAULT 0');
 
 export const id = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
@@ -103,7 +117,7 @@ export function getSubject(roomCode, subjectId) {
 export function listTasks(roomCode, date) {
   return db
     .prepare(
-      `SELECT t.id, t.for_date, t.subject_id, t.content,
+      `SELECT t.id, t.for_date, t.subject_id, t.content, t.done,
               t.audio_path, t.audio_mime, t.audio_size,
               t.created_at, t.updated_at,
               s.name AS subject_name, s.color AS subject_color
@@ -120,6 +134,7 @@ export function listTasks(roomCode, date) {
       subject_name: t.subject_name ?? null,
       subject_color: t.subject_color ?? null,
       content: t.content,
+      done: !!t.done,
       has_audio: !!t.audio_path,
       audio_url: t.audio_path ? `/api/rooms/${roomCode}/audio/${t.id}` : null,
       audio_mime: t.audio_mime ?? null,

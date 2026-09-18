@@ -2,8 +2,9 @@
 
 import React, { useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
-import { Button, Card, Overlay, Screen, SectionTitle, TopBar, TopBarAction } from '../ui';
+import { Button, Card, Overlay, Screen, SectionTitle, Segmented, TopBar, TopBarAction } from '../ui';
 import { colors, spacing, roleLabel } from '../theme';
+import { DENSITY_OPTIONS, FONT_OPTIONS, useDisplay } from '../display';
 import { useApp } from '../AppContext';
 import type { Identity } from '../storage';
 import { ServerField, ServerPrompt } from '../ServerField';
@@ -19,6 +20,7 @@ export default function SettingsScreen({
   onSignOut: () => Promise<void>;
 }) {
   const { identity, connected } = useApp();
+  const { prefs, setFontStep, setDensity, fs } = useDisplay();
   const [mode, setMode] = useState<'main' | 'join'>('main');
   const [serverOpen, setServerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -124,6 +126,18 @@ export default function SettingsScreen({
               {busy && <Text style={s.msg}>保存中…</Text>}
               {!!msg && !busy && <Text style={s.msg}>{msg}</Text>}
 
+              {/* 显示偏好:字号与紧凑度,只影响本机显示,家长端和儿童端各自设置 */}
+              <SectionTitle>显示偏好</SectionTitle>
+              <Card style={{ gap: spacing(1.2) }}>
+                <Text style={[s.rowLabel, { fontSize: fs(14) }]}>字号</Text>
+                <Segmented options={FONT_OPTIONS} value={prefs.fontStep} onChange={setFontStep} />
+                <Text style={[s.rowLabel, { fontSize: fs(14), marginTop: spacing(0.5) }]}>行距(紧凑度)</Text>
+                <Segmented options={DENSITY_OPTIONS} value={prefs.density} onChange={setDensity} />
+                <Text style={[s.hint, { fontSize: fs(12) }]}>
+                  影响作业列表的字号与行距(只影响本机显示)。作业内容过长时单行会省略,点任务文字即可查看全文。
+                </Text>
+              </Card>
+
               <SectionTitle>身份与房间</SectionTitle>
               <Card style={{ gap: spacing(1) }}>
                 <Button
@@ -167,6 +181,7 @@ const s = StyleSheet.create({
   rowValue: { fontSize: 15, color: colors.text, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   msg: { fontSize: 13, color: colors.ok, marginTop: spacing(1) },
+  hint: { color: colors.textSub, lineHeight: 17 },
   about: {
     textAlign: 'center',
     color: colors.textSub,

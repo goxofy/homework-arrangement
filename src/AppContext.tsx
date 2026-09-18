@@ -41,6 +41,8 @@ interface AppContextValue {
   refreshTasks: (date: string) => Promise<void>;
   addTask: (input: { date: string; subject_id: string; content: string; audio_base64?: string; audio_mime?: string }) => Promise<void>;
   editTask: (tid: string, patch: { content?: string; subject_id?: string }, date: string) => Promise<void>;
+  /** 勾选/取消勾选「已完成」(家长与儿童都可操作,乐观更新,失败回滚) */
+  setTaskDone: (tid: string, done: boolean, date: string) => Promise<void>;
   removeTask: (tid: string, date: string) => Promise<void>;
   addSubject: (name: string, color: string | null) => Promise<void>;
   editSubject: (sid: string, patch: { name?: string; color?: string | null }) => Promise<void>;
@@ -256,6 +258,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (!identity) return;
         await api.deleteTask(identity.server, identity.roomCode, tid);
         await fetchTasks(identity, date);
+      },
+      setTaskDone: async (tid, done, date) => {
+        if (!identity) return;
+        // 先改本地(点一下立刻有反馈),失败再拉回真实数据
+        setTasksByDate((m) => ({
+          ...m,
+          [date]: (m[date] ?? []).map((t) => (t.id === tid ? { ...t, done } : t)),
+        }));
+        try {
+          await api.updateTask(identity.server, identity.roomCode, tid, { done });
+        } catch (e) {
+          await fetchTasks(identity, date).catch(() => {});
+          throw e;
+        }
       },
       addSubject: async (name, color) => {
         if (!identity) return;

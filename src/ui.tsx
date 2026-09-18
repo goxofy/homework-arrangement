@@ -25,6 +25,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, radius } from './theme';
 import { useKeyboardInset } from './keyboard';
+import { useDisplay } from './display';
 import {
   addDays,
   dayOfMonth,
@@ -321,20 +322,102 @@ export function GroupHeader({
   name,
   color,
   count,
+  doneCount,
   right,
 }: {
   name: string;
   color?: string | null;
   count?: number;
+  /** 该分组已完成条数(会显示为「已完成 x/y」) */
+  doneCount?: number;
   right?: React.ReactNode;
 }) {
+  const { fs } = useDisplay();
+  const allDone = count != null && count > 0 && doneCount === count;
   return (
-    <View style={styles.groupHeader}>
+    <View style={[styles.groupHeader, { marginTop: spacing(1.25) }]}>
       <View style={[styles.groupDot, { backgroundColor: color ?? colors.primary }]} />
-      <Text style={styles.groupName}>{name}</Text>
-      {count != null && <Text style={styles.groupCount}>{count} 项</Text>}
+      <Text style={[styles.groupName, { fontSize: fs(16) }]}>{name}</Text>
+      {count != null && (
+        <Text style={[styles.groupCount, { fontSize: fs(13) }]}>
+          {count} 项
+          {doneCount != null && doneCount > 0 ? ` · 已完成 ${doneCount}` : ''}
+        </Text>
+      )}
+      {allDone && <Text style={[styles.groupDone, { fontSize: fs(12) }]}>全部完成 🎉</Text>}
       <View style={{ flex: 1 }} />
       {right}
+    </View>
+  );
+}
+
+/**
+ * 勾选圈:未完成是空心圆,完成后填充绿色 + 对勾。
+ * 家长端和儿童端都用它,所以两端的完成交互完全一致。
+ */
+export function DoneCircle({
+  done,
+  onPress,
+  size = 22,
+}: {
+  done: boolean;
+  /** 不传时只作展示(用在本身已可点击、外面还包着一层 Pressable 的地方) */
+  onPress?: () => void;
+  size?: number;
+}) {
+  const { fs } = useDisplay();
+  const box = fs(size);
+  const circle = [
+    styles.doneCircle,
+    { width: box, height: box, borderRadius: box / 2 },
+    done && styles.doneCircleOn,
+  ];
+  const tick = done ? <Text style={[styles.doneTick, { fontSize: fs(14) }]}>✓</Text> : null;
+
+  if (!onPress) return <View style={circle}>{tick}</View>;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: done }}
+      accessibilityLabel={done ? '取消完成标记' : '标记为已完成'}
+      style={circle}>
+      {tick}
+    </Pressable>
+  );
+}
+
+/** 分段选择器(设置页的字号/间距档位用) */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  const { fs } = useDisplay();
+  return (
+    <View style={styles.segmented}>
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <Pressable
+            key={o.value}
+            onPress={() => onChange(o.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: active }}
+            style={[styles.segItem, active && styles.segItemActive]}>
+            <Text
+              style={[styles.segText, { fontSize: fs(14) }, active && styles.segTextActive]}>
+              {o.label}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -536,6 +619,36 @@ const styles = StyleSheet.create({
   groupDot: { width: 10, height: 10, borderRadius: 5 },
   groupName: { fontSize: 16, fontWeight: '700', color: colors.text },
   groupCount: { fontSize: 13, color: colors.textSub },
+  groupDone: { color: colors.ok, fontWeight: '700' },
+
+  doneCircle: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  // View 版本也需要居中(静态展示时用)
+  doneCircleOn: { backgroundColor: colors.ok, borderColor: colors.ok },
+  doneTick: { color: '#fff', fontWeight: '800', textAlign: 'center', includeFontPadding: false },
+
+  segmented: {
+    flexDirection: 'row',
+    gap: spacing(0.5),
+    backgroundColor: colors.bg,
+    borderRadius: 10,
+    padding: 3,
+  },
+  segItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing(0.75),
+    borderRadius: 8,
+  },
+  segItemActive: { backgroundColor: colors.card },
+  segText: { color: colors.textSub, fontWeight: '600' },
+  segTextActive: { color: colors.primaryDark, fontWeight: '800' },
 
   card: {
     backgroundColor: colors.card,

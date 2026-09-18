@@ -116,7 +116,7 @@ export const api = {
     server: string,
     code: string,
     tid: string,
-    patch: { content?: string; subject_id?: string }
+    patch: { content?: string; subject_id?: string; done?: boolean }
   ): Promise<void> {
     await request(server, `/api/rooms/${encodeURIComponent(code)}/tasks/${tid}`, {
       method: 'PUT',
