@@ -10,7 +10,7 @@
 
 ```bash
 git clone https://github.com/goxofy/homework-arrangement.git
-cd homework-arrangement/homework-app/server
+cd homework-arrangement/server
 ```
 
 ## 二、方式 A:直接运行(最快验证)
