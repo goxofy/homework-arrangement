@@ -2,8 +2,9 @@
 
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Card, Screen, SectionTitle } from '../ui';
-import { colors, spacing, radius, roleLabel } from '../theme';
+import { colors, spacing, roleLabel } from '../theme';
 import { api, ApiError } from '../api';
 import { isValidServer, normalizeServer, type Role } from '../storage';
 
@@ -64,64 +65,67 @@ export default function JoinRoomScreen({
   };
 
   return (
-    <Screen>
-      <SectionTitle>{roleLabel[role]}端 · 关联房间</SectionTitle>
+    <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+      <Screen>
+        <SectionTitle>{roleLabel[role]}端 · 关联房间</SectionTitle>
 
-      <Card style={{ gap: spacing(1.5) }}>
-        <Text style={s.label}>服务器地址</Text>
-        <TextInput
-          style={s.input}
-          value={server}
-          onChangeText={setServer}
-          placeholder="例如 192.168.1.10:8787 或 hw.example.com"
-          placeholderTextColor={colors.textSub}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        <Text style={s.hint}>家里自建服务器填局域网/公网 IP + 端口;已内置默认服务器可留空改动</Text>
-      </Card>
-
-      <Card style={{ gap: spacing(1.5), marginTop: spacing(2) }}>
-        <Text style={s.label}>房间号(至少 8 位,字母/数字/连字符)</Text>
-        <TextInput
-          style={[s.input, { fontSize: 22, letterSpacing: 2, fontWeight: '700' }]}
-          value={code}
-          onChangeText={(t) => setCode(normalizeCode(t))}
-          placeholder="如 FAMILY2026"
-          placeholderTextColor={colors.textSub}
-          autoCapitalize="characters"
-          autoCorrect={false}
-        />
-        {role === 'parent' && (
-          <Pressable onPress={() => setCode(genCode())} style={s.genBtn}>
-            <Text style={s.genBtnText}>🎲 随机生成房间号</Text>
-          </Pressable>
-        )}
-      </Card>
-
-      {error && (
-        <Card style={{ marginTop: spacing(2), backgroundColor: '#FDECEC' }}>
-          <Text style={s.error}>{error}</Text>
+        <Card style={{ gap: spacing(1.5) }}>
+          <Text style={s.label}>服务器地址</Text>
+          <TextInput
+            style={s.input}
+            value={server}
+            onChangeText={setServer}
+            placeholder="例如 192.168.1.10:8787 或 hw.example.com"
+            placeholderTextColor={colors.textSub}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <Text style={s.hint}>填家里服务器的地址(局域网 IP + 端口,或域名);填过一次会记住</Text>
         </Card>
-      )}
 
-      <View style={{ marginTop: spacing(3), gap: spacing(1.5) }}>
-        {role === 'parent' ? (
-          <>
-            <Button title="创建新房间" onPress={doCreate} disabled={!canSubmit} loading={busy === 'create'} />
-            <Button title="加入已有房间" variant="ghost" onPress={doJoin} disabled={!canSubmit} loading={busy === 'join'} />
-          </>
-        ) : (
-          <Button title="加入房间" onPress={doJoin} disabled={!canSubmit} loading={busy === 'join'} />
+        <Card style={{ gap: spacing(1.5), marginTop: spacing(2) }}>
+          <Text style={s.label}>房间号(至少 8 位,字母/数字/连字符)</Text>
+          <TextInput
+            style={[s.input, { fontSize: 22, letterSpacing: 2, fontWeight: '700' }]}
+            value={code}
+            onChangeText={(t) => setCode(normalizeCode(t))}
+            placeholder="如 FAMILY2026"
+            placeholderTextColor={colors.textSub}
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+          {role === 'parent' && (
+            <Pressable onPress={() => setCode(genCode())} style={s.genBtn}>
+              <Text style={s.genBtnText}>🎲 随机生成房间号</Text>
+            </Pressable>
+          )}
+        </Card>
+
+        {error && (
+          <Card style={{ marginTop: spacing(2), backgroundColor: '#FDECEC' }}>
+            <Text style={s.error}>{error}</Text>
+          </Card>
         )}
-        <Button title="返回" variant="ghost" onPress={onBack} />
-      </View>
-    </Screen>
+
+        <View style={{ marginTop: spacing(3), gap: spacing(1.5) }}>
+          {role === 'parent' ? (
+            <>
+              <Button title="创建新房间" onPress={doCreate} disabled={!canSubmit} loading={busy === 'create'} />
+              <Button title="加入已有房间" variant="ghost" onPress={doJoin} disabled={!canSubmit} loading={busy === 'join'} />
+            </>
+          ) : (
+            <Button title="加入房间" onPress={doJoin} disabled={!canSubmit} loading={busy === 'join'} />
+          )}
+          <Button title="返回" variant="ghost" onPress={onBack} />
+        </View>
+      </Screen>
+    </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.bg },
   label: { fontSize: 14, fontWeight: '600', color: colors.text },
   input: {
     borderWidth: 1.5,

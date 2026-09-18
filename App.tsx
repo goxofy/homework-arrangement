@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { AppProvider, useApp } from './src/AppContext';
 import { colors, spacing } from './src/theme';
 import { loadServerHint, saveServerHint, type Role } from './src/storage';
@@ -85,10 +86,13 @@ function Root() {
 
 export default function App() {
   return (
-    <AppProvider>
-      <StatusBar style="dark" />
-      <Root />
-    </AppProvider>
+    // SafeAreaProvider 必须包在最外层:状态栏/刘海/手势条避让全靠它注入的 insets
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <AppProvider>
+        <StatusBar style="dark" />
+        <Root />
+      </AppProvider>
+    </SafeAreaProvider>
   );
 }
 

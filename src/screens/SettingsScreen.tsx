@@ -27,7 +27,8 @@ export default function SettingsScreen({
   if (mode === 'join' && identity) {
     return (
       <Modal visible animationType="slide" onRequestClose={() => setMode('main')}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top', 'bottom']}>
+        {/* JoinRoomScreen 自带安全区,这里不要再包一层,否则顶部会让位两次 */}
+        <View style={{ flex: 1, backgroundColor: colors.bg }}>
           <JoinRoomScreen
             role={identity.role}
             initialServer={identity.server}
@@ -37,7 +38,7 @@ export default function SettingsScreen({
             }}
             onBack={() => setMode('main')}
           />
-        </SafeAreaView>
+        </View>
       </Modal>
     );
   }

@@ -20,7 +20,8 @@ async function request<T>(server: string, path: string, init?: RequestInit): Pro
       headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     });
   } catch {
-    throw new ApiError(0, '无法连接服务器,请检查网络或服务器地址');
+    // 带上解析后的实际地址,方便在真机上定位问题(网络不通 / 地址写错 / 服务未启动)
+    throw new ApiError(0, `无法连接服务器(${base}),请检查网络、服务器地址或服务是否已启动`);
   }
   const text = await res.text();
   let data: any = null;

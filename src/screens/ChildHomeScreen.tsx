@@ -58,7 +58,7 @@ export default function ChildHomeScreen() {
   const total = tasksForView.length;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top', 'bottom']}>
       {/* 顶部:日期导航 */}
       <View style={s.topbar}>
         <Pressable

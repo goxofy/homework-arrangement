@@ -1,40 +1,102 @@
 // 通用小组件:屏幕容器、卡片、按钮、任务行等。
 
-import React from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TextStyle,
   View,
   ViewStyle,
   StyleProp,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, radius } from './theme';
+import { useKeyboardInset } from './keyboard';
 
+/** 平板/大屏下限制内容宽度,避免卡片被拉得过宽 */
+const CONTENT_MAX_WIDTH = 720;
+
+/**
+ * 页面容器。统一负责三件事:
+ * 1. 底部安全区(手势条/导航栏)避让
+ * 2. 键盘避让 —— Android 15+ edge-to-edge 下系统不再缩小窗口,必须自己让位
+ * 3. 内容超出屏幕时可滚动(小屏手机/横屏/大字体都不会截断)
+ */
 export function Screen({
   children,
   style,
   scroll = true,
+  center = false,
 }: {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   scroll?: boolean;
+  center?: boolean;
 }) {
-  const inner = [styles.screen, style];
-  if (scroll) {
+  const insets = useSafeAreaInsets();
+  const keyboardInset = useKeyboardInset();
+  const scrollRef = useRef<ScrollView | null>(null);
+  const offsetRef = useRef(0);
+
+  // Android 上窗口不会随键盘缩小(edge-to-edge 下系统不再 resize),
+  // Android 平台也不会自动把聚焦的输入框滚到键盘上方,所以这里量一下它的实际位置,
+  // 只有真的被键盘遮住才滚动(输入框在页面上半部时不会被误滚动)
+  const ensureFocusedVisible = useCallback(() => {
+    const node = TextInput.State.currentlyFocusedInput?.();
+    if (!node || typeof node.measureInWindow !== 'function') return;
+    node.measureInWindow((_x: number, y: number, _w: number, h: number) => {
+      const visibleBottom = Dimensions.get('window').height - keyboardInset - 12;
+      const overflow = y + h - visibleBottom;
+      if (overflow > 0) {
+        scrollRef.current?.scrollTo({ y: offsetRef.current + overflow, animated: true });
+      }
+    });
+  }, [keyboardInset]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android' || keyboardInset <= 0 || !scroll) return;
+    const timer = setTimeout(ensureFocusedVisible, 80);
+    return () => clearTimeout(timer);
+  }, [keyboardInset, scroll, ensureFocusedVisible]);
+
+  // 收缩滚动区域(而不是给内容加 padding),这样可见区域真正让开了键盘
+  const shell = { flex: 1, paddingBottom: keyboardInset };
+
+  if (!scroll) {
     return (
-      <ScrollView
-        style={styles.screenScroll}
-        contentContainerStyle={[styles.screenContent, style]}
-        keyboardShouldPersistTaps="handled">
-        {children}
-      </ScrollView>
+      <View style={[styles.screen, shell, center && styles.screenCenter, style]}>{children}</View>
     );
   }
-  return <View style={inner}>{children}</View>;
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      style={[styles.screenScroll, shell]}
+      contentContainerStyle={[
+        styles.screenContent,
+        { paddingBottom: spacing(8) + insets.bottom },
+        styles.screenInner,
+        center && styles.screenCenter,
+        style,
+      ]}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="interactive"
+      onScroll={(e) => {
+        offsetRef.current = e.nativeEvent.contentOffset.y;
+      }}
+      scrollEventThrottle={32}
+      // iOS:原生自动把聚焦的输入框滚到键盘上方
+      automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+      showsVerticalScrollIndicator={false}>
+      {children}
+    </ScrollView>
+  );
 }
 
 export function Card({
@@ -140,7 +202,10 @@ export function ErrorBar({ message, onRetry }: { message: string; onRetry?: () =
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   screenScroll: { flex: 1, backgroundColor: colors.bg },
-  screenContent: { padding: spacing(2), paddingBottom: spacing(8) },
+  screenContent: { padding: spacing(2), paddingBottom: spacing(8), flexGrow: 1 },
+  // 大屏(平板/横屏)下内容居中限宽,小屏不受影响
+  screenInner: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
+  screenCenter: { justifyContent: 'center' },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius,

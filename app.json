@@ -44,7 +44,8 @@
             "deploymentTarget": "16.4"
           },
           "android": {
-            "minSdkVersion": 24
+            "minSdkVersion": 24,
+            "usesCleartextTraffic": true
           }
         }
       ]

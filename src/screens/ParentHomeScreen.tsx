@@ -58,7 +58,7 @@ export default function ParentHomeScreen({
   }, [activeSubjects, tasks]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top', 'bottom']}>
       {/* 顶部栏 */}
       <View style={s.topbar}>
         <View>

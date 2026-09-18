@@ -69,6 +69,15 @@ eas build --platform all --profile development
 
 > 注意:因为用了原生麦克风 + 系统语音识别,**不能用 Expo Go 运行**。
 
+## 网络说明(连不上时先看这里)
+
+- **服务器地址在 App 里填写**(欢迎页底部),会自动记住,之后在「设置」里可改,**不需要改源码**。
+- **Android 已显式放行明文 HTTP**(`app.json` 里 `expo-build-properties.android.usesCleartextTraffic`)。原因:Android 9 以上默认拦截 `http://` 请求,而家庭自建服务通常就是 `http://192.168.x.x:8787`,不放行的话 Android 端会一直报「无法连接服务器」(iOS 因为系统放行局域网 http,所以看起来是好的)。
+- 改过 `app.json` / 原生配置后**必须重新构建并重新安装 App**,只重新加载 JS 不生效。
+- 想用公网访问(4G/5G 下看作业)**强烈建议配 HTTPS 域名**(见 [server/README.md](server/README.md) 的 Nginx 示例):明文 HTTP 在公网上会被运营商/中间设备篡改或拦截。
+- 排障:App 的报错会带上它**实际请求的地址**,先用手机浏览器打开该地址的 `/api/health`,能返回 `{"ok":true}` 说明网络通、问题在 App 侧;打不开就是网络/地址/服务端问题。
+- 手机和服务器不在同一个局域网时,要么把服务暴露到公网(记得加 HTTPS + 防火墙),要么让手机连回家里的网络(如 VPN/WireGuard)。
+
 ### 3. 安装到设备
 
 **Android**:直接安装 APK(首次需允许"安装未知应用")。由于是 debug 签名,覆盖安装需保持同一签名,卸载重装不影响服务器数据。
