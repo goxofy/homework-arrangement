@@ -39,6 +39,34 @@ export function isToday(dateStr: string): boolean {
   return dateStr === todayStr();
 }
 
+/** 该日期所在周的周一(一周从周一开始) */
+export function startOfWeek(dateStr: string): string {
+  const dow = parseDate(dateStr).getDay(); // 0 = 周日
+  const back = dow === 0 ? 6 : dow - 1;
+  return addDays(dateStr, -back);
+}
+
+/** 显示为「9月14日 - 9月20日」(跨月时两端都带月份) */
+export function weekRangeLabel(weekStart: string): string {
+  const end = addDays(weekStart, 6);
+  const a = parseDate(weekStart);
+  const b = parseDate(end);
+  if (a.getMonth() === b.getMonth()) {
+    return `${a.getMonth() + 1}月${a.getDate()}日 - ${b.getDate()}日`;
+  }
+  return `${a.getMonth() + 1}月${a.getDate()}日 - ${b.getMonth() + 1}月${b.getDate()}日`;
+}
+
+/** 周内按钮上的星期简称:一 / 二 / … / 日 */
+export function weekdayShort(dateStr: string): string {
+  return weekdayLabel(dateStr).replace('周', '');
+}
+
+/** 日号,如 18 */
+export function dayOfMonth(dateStr: string): number {
+  return parseDate(dateStr).getDate();
+}
+
 /** 儿童端只允许查看 今天(含)以前的日期 */
 export function isFuture(dateStr: string): boolean {
   return dateStr > todayStr();

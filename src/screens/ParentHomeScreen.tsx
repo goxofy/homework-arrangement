@@ -7,13 +7,13 @@ import {
   Button,
   Card,
   CONTENT_MAX_WIDTH,
-  DateNav,
   Empty,
+  GroupHeader,
   Overlay,
   Screen,
-  SectionTitle,
   TopBar,
   TopBarAction,
+  WeekNav,
 } from '../ui';
 import { colors, spacing } from '../theme';
 import { useApp } from '../AppContext';
@@ -71,8 +71,9 @@ export default function ParentHomeScreen({
     return map;
   }, [activeSubjects, tasks]);
 
-  const openAdd = (subjectId?: string) => {
-    setPresetSubjectId(subjectId ?? null);
+  // 分组内不再放小「+ 添加」按钮(底部的大按钮 + 弹层里选分组即可)
+  const openAdd = () => {
+    setPresetSubjectId(null);
     setAddOpen(true);
   };
 
@@ -105,8 +106,8 @@ export default function ParentHomeScreen({
           <Text style={s.offline}>● 未连接同步服务,改动可能不同步到孩子设备</Text>
         )}
 
-        {/* 日期导航:家长端也能翻阅历史日期(和儿童端一致,不能翻到未来) */}
-        <DateNav
+        {/* 周导航:家长端也能翻阅历史(和儿童端一致,不能翻到未来) */}
+        <WeekNav
           date={date}
           onChange={changeDate}
           marks={(d) => (tasksByDate[d]?.length ?? 0) > 0}
@@ -129,17 +130,8 @@ export default function ParentHomeScreen({
             const list = grouped.get(sub.id) ?? [];
             if (list.length === 0) return null;
             return (
-              <View key={sub.id} style={{ marginBottom: spacing(2) }}>
-                <SectionTitle
-                  right={
-                    <Pressable onPress={() => openAdd(sub.id)} hitSlop={8}>
-                      <Text style={s.addInline}>+ 添加</Text>
-                    </Pressable>
-                  }>
-                  <Text style={{ color: sub.color ?? colors.primary }}>● </Text>
-                  {sub.name}
-                  <Text style={s.countText}> ({list.length})</Text>
-                </SectionTitle>
+              <View key={sub.id} style={{ marginBottom: spacing(1.5) }}>
+                <GroupHeader name={sub.name} color={sub.color} count={list.length} />
                 {list.map((t) => (
                   <TaskRow
                     key={t.id}
@@ -214,6 +206,10 @@ export default function ParentHomeScreen({
   );
 }
 
+/**
+ * 家长端任务行:单行紧凑布局(内容 + 时间 + 编辑/删除 都在一行),
+ * 不再重复显示分组名 —— 分组名已经在上面的分组标题里了。
+ */
 export function TaskRow({
   task,
   onEdit,
@@ -225,25 +221,16 @@ export function TaskRow({
   onDelete?: () => void;
   readOnly?: boolean;
 }) {
+  const d = new Date(task.created_at);
+  const time = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+
   return (
-    <Card style={s.taskCard}>
-      <View style={{ flex: 1 }}>
-        <Text style={s.taskText}>{task.content}</Text>
-        <View style={s.taskMetaRow}>
-          {task.subject_name && (
-            <View style={[s.tag, { backgroundColor: (task.subject_color ?? colors.primary) + '22' }]}>
-              <Text style={[s.tagText, { color: task.subject_color ?? colors.primary }]}>
-                {task.subject_name}
-              </Text>
-            </View>
-          )}
-          {task.has_audio && <Text style={s.audioTag}>🎵 语音</Text>}
-          <Text style={s.timeText}>
-            {new Date(task.created_at).getHours().toString().padStart(2, '0')}:
-            {new Date(task.created_at).getMinutes().toString().padStart(2, '0')} 布置
-          </Text>
-        </View>
-      </View>
+    <View style={s.taskRow}>
+      <Text style={s.taskText} numberOfLines={1}>
+        {task.content}
+      </Text>
+      {task.has_audio && <Text style={s.audioTag}>🎵</Text>}
+      <Text style={s.timeText}>{time}</Text>
       {!readOnly && (
         <View style={s.taskActions}>
           <Pressable onPress={onEdit} hitSlop={10}>
@@ -254,7 +241,7 @@ export function TaskRow({
           </Pressable>
         </View>
       )}
-    </Card>
+    </View>
   );
 }
 
@@ -430,16 +417,23 @@ const s = StyleSheet.create({
     paddingHorizontal: spacing(2),
     paddingBottom: spacing(0.5),
   },
-  addInline: { color: colors.primary, fontSize: 14, fontWeight: '600' },
-  countText: { color: colors.textSub, fontSize: 13, fontWeight: '400' },
-  taskCard: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.5), marginBottom: spacing(1) },
-  taskText: { fontSize: 16, color: colors.text, lineHeight: 22 },
-  taskMetaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(1), marginTop: spacing(1) },
-  tag: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  tagText: { fontSize: 11, fontWeight: '700' },
-  audioTag: { fontSize: 12, color: colors.primary },
+  // 单行任务行:高度压到最小,一屏能多看几条
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(0.8),
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    paddingHorizontal: spacing(1.5),
+    paddingVertical: spacing(1),
+    marginBottom: spacing(0.6),
+  },
+  taskText: { flex: 1, fontSize: 15, color: colors.text },
+  audioTag: { fontSize: 12 },
   timeText: { fontSize: 11, color: colors.textSub },
-  taskActions: { alignItems: 'flex-end', gap: spacing(1) },
+  taskActions: { flexDirection: 'row', alignItems: 'center', gap: spacing(0.9) },
   editBtn: { color: colors.primary, fontSize: 13, fontWeight: '600' },
   delBtn: { color: colors.danger, fontSize: 13, fontWeight: '600' },
   totalHint: { textAlign: 'center', color: colors.textSub, fontSize: 12, marginTop: spacing(1) },

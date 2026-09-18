@@ -25,7 +25,16 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, radius } from './theme';
 import { useKeyboardInset } from './keyboard';
-import { addDays, displayDate, isToday, todayStr, weekdayLabel } from './dates';
+import {
+  addDays,
+  dayOfMonth,
+  displayDate,
+  isToday,
+  startOfWeek,
+  todayStr,
+  weekRangeLabel,
+  weekdayShort,
+} from './dates';
 
 /** 平板/大屏下限制内容宽度,避免卡片被拉得过宽 */
 export const CONTENT_MAX_WIDTH = 720;
@@ -226,65 +235,106 @@ export function TopBarAction({
 }
 
 /**
- * 日期导航:前一天 / 后一天 + 最近 7 天快捷条。
- * 家长端和儿童端共用,保证两端行为一致(都不能翻到未来)。
+ * 周导航(家长端和儿童端共用):
+ * 上一周 / 下一周 + 本周七天的按钮(周一到周日)。
+ * 过去的日期可任意查看,未来的日期(含未来周)一律不可选。
  */
-export function DateNav({
+export function WeekNav({
   date,
   onChange,
   marks,
 }: {
   date: string;
   onChange: (date: string) => void;
-  /** 该日期是否有作业(会在快捷条上显示小圆点) */
+  /** 该日期是否有作业(会在按钮上显示小圆点) */
   marks?: (date: string) => boolean;
 }) {
   const today = todayStr();
-  const canNext = date < today;
-  const list = [6, 5, 4, 3, 2, 1, 0].map((back) => addDays(today, -back));
+  const weekStart = startOfWeek(date);
+  const weekDays = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(weekStart, i));
+  // 下一周只要还有「未来」就不能翻(当前周永远不能往后翻)
+  const canNextWeek = addDays(weekStart, 7) <= today;
 
-  const shift = (delta: number) => {
-    const next = addDays(date, delta);
-    if (next > today) return;
-    onChange(next);
+  const goWeek = (delta: number) => {
+    const target = addDays(date, delta * 7);
+    onChange(target > today ? today : target);
   };
 
   return (
     <View style={styles.dateNav}>
       <View style={styles.dateNavTop}>
-        <Pressable style={styles.navBtn} onPress={() => shift(-1)}>
-          <Text style={styles.navBtnText}>‹ 前一天</Text>
+        <Pressable style={styles.navBtn} onPress={() => goWeek(-1)} hitSlop={8}>
+          <Text style={styles.navBtnText}>‹ 上一周</Text>
         </Pressable>
         <View style={styles.dateCenter}>
           <Text style={styles.dateTitle} numberOfLines={1}>
-            {isToday(date) ? '今天' : displayDate(date)}
+            {weekRangeLabel(weekStart)}
           </Text>
           <Text style={styles.dateSub} numberOfLines={1}>
-            {isToday(date) ? displayDate(date) : weekdayLabel(date)}
+            {isToday(date) ? `今天 · ${displayDate(date)}` : displayDate(date)}
           </Text>
         </View>
-        <Pressable style={[styles.navBtn, !canNext && styles.navBtnDisabled]} disabled={!canNext} onPress={() => shift(1)}>
-          <Text style={[styles.navBtnText, !canNext && { color: colors.textSub }]}>后一天 ›</Text>
+        <Pressable
+          style={[styles.navBtn, !canNextWeek && styles.navBtnDisabled]}
+          disabled={!canNextWeek}
+          hitSlop={8}
+          onPress={() => goWeek(1)}>
+          <Text style={[styles.navBtnText, !canNextWeek && { color: colors.textSub }]}>下一周 ›</Text>
         </Pressable>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.quickRow}>
-        {list.map((d) => {
+      <View style={styles.weekRow}>
+        {weekDays.map((d) => {
+          const future = d > today;
           const active = d === date;
+          const isTodayDate = d === today;
           const has = marks?.(d) ?? false;
           return (
-            <Pressable key={d} style={[styles.quickBtn, active && styles.quickBtnActive]} onPress={() => onChange(d)}>
-              <Text style={[styles.quickBtnText, active && styles.quickBtnTextActive]}>
-                {isToday(d) ? '今' : weekdayLabel(d).replace('周', '')}
+            <Pressable
+              key={d}
+              disabled={future}
+              onPress={() => onChange(d)}
+              style={[
+                styles.weekBtn,
+                isTodayDate && !active && styles.weekBtnToday,
+                active && styles.weekBtnActive,
+                future && styles.weekBtnDisabled,
+              ]}>
+              <Text style={[styles.weekBtnDay, active && styles.weekBtnTextActive]}>
+                {weekdayShort(d)}
               </Text>
+              <Text style={[styles.weekBtnNum, active && styles.weekBtnTextActive]}>{dayOfMonth(d)}</Text>
               {has && !active && <View style={styles.quickDot} />}
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * 分组标题(家长端/儿童端共用,保证两端外观一致):
+ * 一个小圆点(分组颜色) + 分组名 + 数量,不再用整条底色块。
+ */
+export function GroupHeader({
+  name,
+  color,
+  count,
+  right,
+}: {
+  name: string;
+  color?: string | null;
+  count?: number;
+  right?: React.ReactNode;
+}) {
+  return (
+    <View style={styles.groupHeader}>
+      <View style={[styles.groupDot, { backgroundColor: color ?? colors.primary }]} />
+      <Text style={styles.groupName}>{name}</Text>
+      {count != null && <Text style={styles.groupCount}>{count} 项</Text>}
+      <View style={{ flex: 1 }} />
+      {right}
     </View>
   );
 }
@@ -423,55 +473,69 @@ const styles = StyleSheet.create({
   topBarBtn: { paddingHorizontal: spacing(1.2), paddingVertical: spacing(0.6) },
   topBarAction: { fontSize: 16, fontWeight: '600', color: colors.primary },
 
-  dateNav: { paddingTop: spacing(1.5) },
+  dateNav: { paddingTop: spacing(1) },
   dateNavTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing(2),
-    gap: spacing(1),
+    gap: spacing(0.75),
   },
   navBtn: {
     backgroundColor: colors.card,
-    borderRadius: 12,
-    paddingHorizontal: spacing(1.5),
-    paddingVertical: spacing(1),
+    borderRadius: 10,
+    paddingHorizontal: spacing(1),
+    paddingVertical: spacing(0.75),
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
   navBtnDisabled: { opacity: 0.5 },
-  navBtnText: { fontSize: 15, color: colors.primary, fontWeight: '600' },
+  navBtnText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   dateCenter: { flex: 1, alignItems: 'center' },
-  dateTitle: { fontSize: 22, fontWeight: '800', color: colors.text },
+  dateTitle: { fontSize: 16, fontWeight: '800', color: colors.text },
   dateSub: { fontSize: 12, color: colors.textSub, marginTop: 2 },
-  quickRow: {
+  weekRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing(0.8),
+    alignItems: 'stretch',
+    gap: spacing(0.5),
     paddingHorizontal: spacing(2),
-    paddingVertical: spacing(1.5),
+    paddingVertical: spacing(1.25),
   },
-  quickBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
+  weekBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing(0.75),
+    borderRadius: 10,
     backgroundColor: colors.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  quickBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  quickBtnText: { fontSize: 15, color: colors.text, fontWeight: '600' },
-  quickBtnTextActive: { color: '#fff' },
+  weekBtnToday: { borderColor: colors.primary, borderWidth: 1.5 },
+  weekBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  weekBtnDisabled: { opacity: 0.42 },
+  weekBtnDay: { fontSize: 11, color: colors.textSub },
+  weekBtnNum: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 1 },
+  weekBtnTextActive: { color: '#fff' },
   quickDot: {
     position: 'absolute',
-    bottom: 5,
-    width: 5,
-    height: 5,
-    borderRadius: 3,
+    bottom: 4,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
     backgroundColor: colors.warn,
   },
+
+  groupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(0.85),
+    marginTop: spacing(1.25),
+    marginBottom: spacing(0.85),
+  },
+  groupDot: { width: 10, height: 10, borderRadius: 5 },
+  groupName: { fontSize: 16, fontWeight: '700', color: colors.text },
+  groupCount: { fontSize: 13, color: colors.textSub },
 
   card: {
     backgroundColor: colors.card,

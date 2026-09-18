@@ -4,8 +4,8 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { Card, CONTENT_MAX_WIDTH, DateNav, Empty, Screen } from '../ui';
-import { colors, spacing, radius } from '../theme';
+import { Card, CONTENT_MAX_WIDTH, Empty, GroupHeader, Screen, WeekNav } from '../ui';
+import { colors, spacing } from '../theme';
 import { useApp } from '../AppContext';
 import { displayDate, isToday, todayStr } from '../dates';
 import type { Subject, Task } from '../storage';
@@ -82,7 +82,7 @@ export default function ChildHomeScreen() {
         </View>
         {!connected && <Text style={s.offline}>● 未连接同步服务,内容可能不是最新的</Text>}
 
-        <DateNav
+        <WeekNav
           date={date}
           onChange={changeDate}
           marks={(d) => (tasksByDate[d]?.length ?? 0) > 0}
@@ -100,12 +100,8 @@ export default function ChildHomeScreen() {
           </Card>
         ) : (
           grouped.map(({ subject, tasks: list }) => (
-            <View key={subject.id} style={{ marginBottom: spacing(3) }}>
-              <View style={[s.subjectHeader, { backgroundColor: (subject.color ?? colors.primary) + '1A' }]}>
-                <View style={[s.subjectDot, { backgroundColor: subject.color ?? colors.primary }]} />
-                <Text style={[s.subjectName, { color: subject.color ?? colors.primary }]}>{subject.name}</Text>
-                <Text style={s.subjectCount}>{list.length} 项</Text>
-              </View>
+            <View key={subject.id} style={{ marginBottom: spacing(1.5) }}>
+              <GroupHeader name={subject.name} color={subject.color} count={list.length} />
               {list.map((t) => (
                 <ChildTaskCard key={t.id} task={t} server={identity?.server ?? ''} />
               ))}
@@ -128,13 +124,15 @@ export default function ChildHomeScreen() {
   );
 }
 
-/** 儿童端任务卡:大字 + 语音播放 */
+/** 儿童端任务卡:单行(内容 + 语音按钮),一屏能看更多条 */
 function ChildTaskCard({ task, server }: { task: Task; server: string }) {
   return (
-    <Card style={s.taskCard}>
-      <Text style={s.taskText}>{task.content}</Text>
+    <View style={s.taskCard}>
+      <Text style={s.taskText} numberOfLines={1}>
+        {task.content}
+      </Text>
       {task.has_audio && task.audio_url && <AudioButton uri={`${server}${task.audio_url}`} />}
-    </Card>
+    </View>
   );
 }
 
@@ -155,10 +153,13 @@ function AudioButton({ uri }: { uri: string }) {
   };
 
   return (
-    <Pressable style={s.audioBtn} onPress={toggle}>
-      <Text style={s.audioBtnText}>
-        {status.playing ? '⏸ 暂停语音' : status.currentTime > 0 ? '↻ 再听一次' : '▶️ 播放语音'}
-      </Text>
+    <Pressable
+      style={s.audioBtn}
+      onPress={toggle}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={status.playing ? '暂停语音' : '播放语音'}>
+      <Text style={s.audioBtnIcon}>{status.playing ? '⏸' : '▶'}</Text>
     </Pressable>
   );
 }
@@ -191,28 +192,28 @@ const s = StyleSheet.create({
     paddingHorizontal: spacing(2),
     paddingBottom: spacing(0.5),
   },
-  subjectHeader: {
+  // 单行任务卡:和分组标题配合,一屏能看到的作业条数更多
+  taskCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing(1),
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
     paddingHorizontal: spacing(1.5),
     paddingVertical: spacing(1),
-    borderRadius: radius,
-    marginBottom: spacing(1),
+    marginBottom: spacing(0.6),
   },
-  subjectDot: { width: 14, height: 14, borderRadius: 7 },
-  subjectName: { fontSize: 20, fontWeight: '800' },
-  subjectCount: { fontSize: 14, color: colors.textSub, marginLeft: 'auto' },
-  taskCard: { marginBottom: spacing(1.2), padding: spacing(2) },
-  taskText: { fontSize: 19, lineHeight: 30, color: colors.text },
+  taskText: { flex: 1, fontSize: 17, color: colors.text },
   audioBtn: {
-    marginTop: spacing(1.2),
-    alignSelf: 'flex-start',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: colors.primarySoft,
-    borderRadius: 999,
-    paddingHorizontal: spacing(1.5),
-    paddingVertical: spacing(0.8),
   },
-  audioBtnText: { color: colors.primaryDark, fontSize: 14, fontWeight: '700' },
+  audioBtnIcon: { color: colors.primaryDark, fontSize: 14, fontWeight: '700' },
   footerHint: { textAlign: 'center', color: colors.textSub, fontSize: 12, marginTop: spacing(1) },
 });
