@@ -218,9 +218,12 @@ app.put('/api/rooms/:code/tasks/:tid', (req, res) => {
 app.delete('/api/rooms/:code/tasks/:tid', (req, res) => {
   const code = withRoom(req, res);
   if (!code) return;
-  const ok = deleteTask(code, req.params.tid);
-  if (!ok) return notFound(res, '任务不存在');
-  broadcast(code, { type: 'tasks_changed' });
+  // 先取出 for_date:广播必须带上日期,否则客户端不知道要刷新哪一天,
+  // 子设备就会一直看到这条已被删除的任务,直到手动切日期/重进页面。
+  const task = getTask(code, req.params.tid);
+  if (!task) return notFound(res, '任务不存在');
+  deleteTask(code, req.params.tid);
+  broadcast(code, { type: 'tasks_changed', date: task.for_date });
   res.json({ ok: true });
 });
 

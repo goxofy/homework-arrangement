@@ -142,8 +142,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const msg = JSON.parse(String(e.data));
           if (msg.type === 'subjects_changed') {
             fetchSubjects(id).catch(() => {});
-          } else if (msg.type === 'tasks_changed' && msg.date) {
-            fetchTasks(id, msg.date).catch(() => {});
+          } else if (msg.type === 'tasks_changed') {
+            if (msg.date) {
+              fetchTasks(id, msg.date).catch(() => {});
+            } else {
+              // 兼容没带日期的广播(旧版服务端):刷新所有已加载的日期,
+              // 宁可多刷一点,也不要漏掉删除这类会让本地数据变脏的事件。
+              knownDatesRef.current.forEach((d) => fetchTasks(id, d).catch(() => {}));
+            }
           }
         } catch {
           /* 忽略 */
