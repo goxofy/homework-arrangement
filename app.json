@@ -9,10 +9,12 @@
     "scheme": "homework",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.family.homeworkapp",
+      "bundleIdentifier": "com.goxofy.homework",
+      "buildNumber": "1",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "用于录制语音作业并自动转为文字,方便家长布置作业。",
-        "NSSpeechRecognitionUsageDescription": "用于把您说的话转成作业文字。"
+        "NSSpeechRecognitionUsageDescription": "用于把您说的话转成作业文字。",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

@@ -53,6 +53,7 @@ homework-app/
 推送或手动触发工作流:
 - `Android APK`:产出 `homework-release.apk`(debug 签名,可直接安装)
 - `iOS unsigned IPA`:产出 `homework-unsigned.ipa`(未签名,需侧载,见下文)
+- `iOS signed IPA (TestFlight)`:产出**已签名**的 ipa,用于上传 TestFlight(只手动触发/tag 触发,需要签名凭证,见下文)
 
 在 Actions 页面 → 选工作流 → **Run workflow** 手动触发;推送 main 也会自动触发(客户端文件有变动时)。
 
@@ -107,6 +108,8 @@ ipa 未签名,需通过侧载工具安装到 iPhone/iPad:
 
 免费 Apple ID 签名 7 天过期,过期后重复安装即可(数据在服务器,不影响作业记录)。
 
+> 如果你能拿到 App Store Connect 团队的 Admin 角色(见下文),更省事的做法是走 **TestFlight 内测**:签名有效期内不用刷新,装一次能一直用到 build 过期。
+
 ### 4. 日常使用
 
 1. **家长**(手机):首次打开选「我是家长」→ 填服务器地址(如 `192.168.1.10:8787`,填一次会记住)→ 创建房间(手动指定或随机生成 ≥8 位房间号)
@@ -118,6 +121,51 @@ ipa 未签名,需通过侧载工具安装到 iPhone/iPad:
 7. 作业文字太长被省略号截断时,点任务文字进入详情页看全文(儿童端在详情里也能播放语音)
 8. 不想一屏只能看几条?设置页 →「显示偏好」调字号/行距(家长端、儿童端各自设置本机)
 9. 换设备/换身份:设置页可改服务器、换房间、切换家长↔儿童
+
+## iOS 自用发布到 TestFlight(不上架 App Store)
+
+TestFlight 只收**已签名**的 ipa;而且 App Store Connect 现在要求用 Xcode 16+/iOS 18+ SDK 构建,所以签名构建放在 CI(CI 上的 Xcode 是新的),你的 Mac 只需要装一个 **Transporter** 来上传。
+
+前提:你的 Apple ID 已经被 App Store Connect 团队邀请,角色是**管理(Admin)**;订阅是对方的**个人**开发者账号。
+
+### 一次性准备(只有证书持有者能做)
+
+朋友在 [developer.apple.com/account](https://developer.apple.com/account) → Certificates, Identifiers & Profiles:
+
+1. **Identifiers → ＋ → App IDs → App**,Bundle ID 选 *Explicit*,填 `com.goxofy.homework`
+2. **Certificates → ＋ → Apple Distribution**
+   - 需要 CSR:在他 Mac 上「钥匙串访问 → 证书助理 → 从证书颁发机构请求证书」,存到磁盘后上传
+   - 生成后下载 `.cer`,双击装进钥匙串 → 钥匙串里右键这张证书 → **导出** → 存成 `.p12`(设个密码)
+   - 个人账号最多 3 张分发证书,若已满会要求先吊销一张
+3. **Profiles → ＋ → Distribution → App Store**,选上面的 App ID + 刚生成的证书 → 下载 `.mobileprovision`
+4. 把三样东西给你:**`.p12` 文件 + 它的密码 + `.mobileprovision`**(Team ID 由工作流自己从描述文件里读)
+
+> 这是分发凭证,别提交进 git。请他一年内不要吊销这张证书(过期或被吊销后要重新给一份)。
+> 另外:个人账号邀请的成员拿不到证书/描述文件入口,所以上面几步只能他做;你在 App Store Connect 里建 App 记录、传 build、管 TestFlight 都没问题。
+
+### 配置 GitHub Secrets
+
+仓库 → Settings → Secrets and variables → Actions → New repository secret:
+
+| Name | 值 |
+|------|-----|
+| `IOS_DIST_P12_BASE64` | `base64 -i ~/Desktop/distribution.p12 \| pbcopy` 的结果 |
+| `IOS_DIST_P12_PASSWORD` | 导出 p12 时设的密码(明文) |
+| `IOS_PROFILE_BASE64` | `base64 -i ~/Desktop/app.mobileprovision \| pbcopy` 的结果 |
+
+### 出包 + 上传
+
+1. Actions → **iOS signed IPA (TestFlight)** → Run workflow(打 `v*` tag 也会自动触发)
+2. 下载产物 `homework-ios-signed-ipa`
+3. Mac App Store 装 **Transporter** → 打开 → 用你的 Apple ID 登录 → 把 ipa 拖进去 → Deliver
+4. 等 5–15 分钟:App Store Connect → TestFlight → 内部测试 → 建个测试组,把自己加进去
+5. iPhone/iPad 装 **TestFlight** App → 接受邀请 → 安装
+
+### 三个必须知道的点
+
+- **上传前必须已有 App 记录**:App Store Connect → Apps → ＋ → New App,名称随意(如「今日作业」),Bundle ID 选 `com.goxofy.homework`。Admin 通常能自己建;若「＋」是灰的(个人账号对建 App 记录有限制),让朋友建一次。
+- **build 号自动递增**:工作流每次把 GitHub run number 写进 `ios.buildNumber`,不用手动改(改的是 CI 里的临时文件,不进 git)。
+- **内部测试不需审核**(也不涉及备案),但 **build 有效期 90 天**,过期重新跑工作流 + 重新上传即可;TestFlight 内部测试员上限 100 人。
 
 ## 界面与适配说明(踩过的坑)
 

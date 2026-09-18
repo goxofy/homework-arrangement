@@ -1,0 +1,196 @@
+name: iOS signed IPA (TestFlight)
+
+# 只在「手动触发」和「打 tag」时运行,不会因为日常 push 触发:
+# 它需要把朋友的 Apple Distribution 证书和 App Store 描述文件作为 secrets 注入。
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+      P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+      PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check signing credentials
+        run: |
+          missing=0
+          [ -n "$P12_BASE64" ]     || { echo "::error::缺少 secret IOS_DIST_P12_BASE64"; missing=1; }
+          [ -n "$P12_PASSWORD" ]   || { echo "::error::缺少 secret IOS_DIST_P12_PASSWORD"; missing=1; }
+          [ -n "$PROFILE_BASE64" ] || { echo "::error::缺少 secret IOS_PROFILE_BASE64"; missing=1; }
+          [ "$missing" = 0 ] || { echo "请在 Settings → Secrets and variables → Actions 里补齐上面这些 secret(生成方法见 README)"; exit 1; }
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 修复 CocoaPods 头文件生成时 MACOSX_DEPLOYMENT_TARGET 检查警告
+      - name: Set MACOSX_DEPLOYMENT_TARGET
+        run: echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          npm i -g bun
+          bun install --frozen-lockfile
+
+      # TestFlight 每次上传都要求 build 号递增,这里直接用 CI 的 run number,免去手工改 app.json
+      - name: Bump iOS build number
+        run: |
+          node -e '
+            const fs = require("fs");
+            const cfg = JSON.parse(fs.readFileSync("app.json", "utf8"));
+            cfg.expo.ios = cfg.expo.ios || {};
+            cfg.expo.ios.buildNumber = process.env.BUILD_NUMBER || "1";
+            fs.writeFileSync("app.json", JSON.stringify(cfg, null, 2) + "\n");
+          '
+          echo "buildNumber = $(node -p "require('./app.json').expo.ios.buildNumber")"
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+
+      - name: Generate native iOS project (prebuild)
+        run: npx expo prebuild --platform ios --no-install
+
+      # ---- 注入签名凭证 ----
+      - name: Import distribution certificate
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+
+          # 把临时钥匙串并入搜索列表,否则 codesign 找不到这张证书
+          security list-keychain -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | tr -d '"')
+
+          echo "已导入的签名身份:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Install provisioning profile
+        run: |
+          echo "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$RUNNER_TEMP/profile.plist")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$RUNNER_TEMP/profile.plist")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$RUNNER_TEMP/profile.plist")
+          APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" "$RUNNER_TEMP/profile.plist")
+          BUNDLE_ID="${APP_ID#*.}"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/profile.mobileprovision" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+
+          echo "描述文件: $PROFILE_NAME"
+          echo "Team ID : $TEAM_ID"
+          echo "Bundle ID(来自描述文件): $BUNDLE_ID"
+
+          # 描述文件里的 bundle id 必须和 app.json 里的一致,不然签名/上传必失败
+          CONFIG_BUNDLE_ID=$(node -p "require('./app.json').expo.ios.bundleIdentifier")
+          if [ "$BUNDLE_ID" != "$CONFIG_BUNDLE_ID" ]; then
+            echo "::error::描述文件的 bundle id ($BUNDLE_ID) 与 app.json 的 ($CONFIG_BUNDLE_ID) 不一致,请让证书持有者按 app.json 的值重新注册 App ID + 描述文件"
+            exit 1
+          fi
+
+          {
+            echo "PROFILE_NAME=$PROFILE_NAME"
+            echo "TEAM_ID=$TEAM_ID"
+            echo "BUNDLE_ID=$BUNDLE_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Install pods
+        run: |
+          cd ios
+          pod install
+
+      - name: Write ExportOptions.plist
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>${TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key>
+              <string>${PROFILE_NAME}</string>
+            </dict>
+            <key>destination</key>
+            <string>export</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>compileBitcode</key>
+            <false/>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Archive (signed, App Store)
+        run: |
+          xcodebuild -workspace ios/app.xcworkspace \
+            -scheme app \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/app.xcarchive \
+            archive \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
+
+      - name: Export signed IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/app.xcarchive \
+            -exportPath dist \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+
+          ls -lh dist
+          IPA=$(find dist -maxdepth 1 -name '*.ipa' | head -n 1)
+          [ -n "$IPA" ] || { echo "::error::没有生成 ipa"; exit 1; }
+          echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: homework-ios-signed-ipa
+          path: dist/*.ipa
+          if-no-files-found: error
+
+      - name: Attach to Release (tag push only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.ipa
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain "$KEYCHAIN_PATH" || true
