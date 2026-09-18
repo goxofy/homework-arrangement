@@ -55,7 +55,8 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          # -x lint:CI 出包不需要 release lint(它是 OOM 重灾区)
+          ./gradlew assembleRelease -x lint --no-daemon
 
       - name: Rename APK
         run: |
