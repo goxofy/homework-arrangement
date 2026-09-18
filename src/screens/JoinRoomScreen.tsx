@@ -2,8 +2,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button, Card, Screen, SectionTitle } from '../ui';
+import { Button, Card, SAFE_EDGES, Screen, SectionTitle } from '../ui';
 import { colors, spacing, roleLabel } from '../theme';
 import { api, ApiError } from '../api';
 import { isValidServer, normalizeServer, type Role } from '../storage';
@@ -21,11 +20,14 @@ export default function JoinRoomScreen({
   initialServer,
   onJoined,
   onBack,
+  safe = true,
 }: {
   role: Role;
   initialServer?: string;
   onJoined: (server: string, code: string) => void;
   onBack: () => void;
+  /** 已经在弹层(Overlay)里时传 false,避免安全区让位两次 */
+  safe?: boolean;
 }) {
   const [server, setServer] = useState(initialServer ?? '');
   const [code, setCode] = useState('');
@@ -65,10 +67,11 @@ export default function JoinRoomScreen({
   };
 
   return (
-    <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
-      <Screen>
+    <View style={s.root}>
+      <Screen edges={safe ? [...SAFE_EDGES] : []}>
         <SectionTitle>{roleLabel[role]}端 · 关联房间</SectionTitle>
 
+        {/* 服务器地址放最上面:键盘从底部弹出,这两张卡都在键盘上方 */}
         <Card style={{ gap: spacing(1.5) }}>
           <Text style={s.label}>服务器地址</Text>
           <TextInput
@@ -120,12 +123,12 @@ export default function JoinRoomScreen({
           <Button title="返回" variant="ghost" onPress={onBack} />
         </View>
       </Screen>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1, backgroundColor: colors.bg },
   label: { fontSize: 14, fontWeight: '600', color: colors.text },
   input: {
     borderWidth: 1.5,

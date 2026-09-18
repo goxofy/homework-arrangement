@@ -1,13 +1,13 @@
 // 儿童端首页(iPad 为主):当日作业大字显示、语音播放、历史日期回查(只读)。
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAudioPlayer } from 'expo-audio';
-import { Button, Card, Empty, Screen } from '../ui';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { Card, CONTENT_MAX_WIDTH, DateNav, Empty, Screen } from '../ui';
 import { colors, spacing, radius } from '../theme';
 import { useApp } from '../AppContext';
-import { addDays, displayDate, isFuture, isToday, todayStr, weekdayLabel } from '../dates';
+import { displayDate, isToday, todayStr } from '../dates';
 import type { Subject, Task } from '../storage';
 import SettingsScreen from './SettingsScreen';
 
@@ -17,22 +17,27 @@ export default function ChildHomeScreen() {
     subjects,
     tasksByDate,
     loadingDates,
+    connected,
     refreshTasks,
     updateIdentity,
     signOut,
   } = useApp();
+  const insets = useSafeAreaInsets();
 
   const [date, setDate] = useState(todayStr());
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const tasks = tasksByDate[date] ?? [];
   const loading = !!loadingDates[date];
-  const future = isFuture(date);
 
-  // 未来日期禁看
-  React.useEffect(() => {
-    if (future) refreshTasks(todayStr()).catch(() => {});
-  }, [future, refreshTasks]);
+  // 避免把 refreshTasks 的身份写进依赖(它会随数据变化而变)
+  const refreshRef = useRef(refreshTasks);
+  refreshRef.current = refreshTasks;
+
+  const changeDate = (next: string) => {
+    setDate(next);
+    refreshRef.current(next).catch(() => {});
+  };
 
   const grouped = useMemo(() => {
     const map: { subject: Subject; tasks: Task[] }[] = [];
@@ -53,76 +58,45 @@ export default function ChildHomeScreen() {
     return map;
   }, [subjects, tasks]);
 
-  const viewDate = future ? todayStr() : date;
-  const tasksForView = future ? tasksByDate[todayStr()] ?? [] : tasks;
-  const total = tasksForView.length;
+  const total = tasks.length;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top', 'bottom']}>
-      {/* 顶部:日期导航 */}
-      <View style={s.topbar}>
-        <Pressable
-          style={s.navBtn}
-          onPress={() => {
-            const next = addDays(viewDate, -1);
-            setDate(next);
-            refreshTasks(next).catch(() => {});
-          }}>
-          <Text style={s.navBtnText}>‹ 前一天</Text>
-        </Pressable>
-        <View style={{ alignItems: 'center' }}>
-          <Text style={s.dateText}>{isToday(viewDate) ? '今天' : displayDate(viewDate)}</Text>
-          <Text style={s.weekText}>
-            {weekdayLabel(viewDate)} · 共 {total} 项作业
-          </Text>
+    // 根节点不加安全区 padding,设置弹层才能覆盖整个屏幕
+    <View style={s.root}>
+      <View style={{ paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }}>
+        {/* 大屏(横屏 iPad)下与列表保持同样的居中宽度 */}
+        <View style={s.headerInner}>
+        <View style={s.topbar}>
+          <View style={{ flex: 1, paddingRight: spacing(1) }}>
+            <Text style={s.topTitle} numberOfLines={1}>
+              今日作业
+            </Text>
+            <Text style={s.topSub} numberOfLines={1}>
+              儿童端 · 房间 {identity?.roomCode ?? '-'}
+            </Text>
+          </View>
+          {/* 设置:带文字的按钮,离屏幕边缘留出安全区,不再是贴边的小齿轮 */}
+          <Pressable style={s.topBtn} onPress={() => setSettingsOpen(true)}>
+            <Text style={s.topBtnText}>设置</Text>
+          </Pressable>
         </View>
-        <Pressable
-          style={[s.navBtn, isToday(viewDate) && { opacity: 0.35 }]}
-          disabled={isToday(viewDate)}
-          onPress={() => {
-            const next = addDays(viewDate, 1);
-            if (!isFuture(next)) {
-              setDate(next);
-              refreshTasks(next).catch(() => {});
-            }
-          }}>
-          <Text style={s.navBtnText}>后一天 ›</Text>
-        </Pressable>
+        {!connected && <Text style={s.offline}>● 未连接同步服务,内容可能不是最新的</Text>}
+
+        <DateNav
+          date={date}
+          onChange={changeDate}
+          marks={(d) => (tasksByDate[d]?.length ?? 0) > 0}
+        />
+        </View>
       </View>
 
-      {/* 快捷日期条:近 7 天 */}
-      <View style={s.quickRow}>
-        {[6, 5, 4, 3, 2, 1, 0].map((back) => {
-          const d = addDays(todayStr(), -back);
-          const active = d === viewDate;
-          const has = (tasksByDate[d]?.length ?? 0) > 0;
-          return (
-            <Pressable
-              key={d}
-              style={[s.quickBtn, active && s.quickBtnActive]}
-              onPress={() => {
-                setDate(d);
-                refreshTasks(d).catch(() => {});
-              }}>
-              <Text style={[s.quickBtnText, active && s.quickBtnTextActive]}>
-                {back === 0 ? '今' : weekdayLabel(d).replace('周', '')}
-              </Text>
-              {has && !active && <View style={s.quickDot} />}
-            </Pressable>
-          );
-        })}
-        <View style={{ flex: 1 }} />
-        <Pressable style={s.navBtn} onPress={() => setSettingsOpen(true)}>
-          <Text style={s.navBtnText}>⚙️</Text>
-        </Pressable>
-      </View>
-
-      <Screen>
+      {/* 顶部栏已经让开了状态栏,这里只需要底部(无底部栏)和横屏左右 */}
+      <Screen edges={['bottom', 'left', 'right']}>
         {loading && total === 0 ? (
           <Empty text="加载中…" />
         ) : total === 0 ? (
           <Card>
-            <Empty text={isToday(viewDate) ? '今天没有作业,尽情玩耍吧 🎉' : '这一天没有作业'} />
+            <Empty text={isToday(date) ? '今天没有作业,尽情玩耍吧 🎉' : '这一天没有作业'} />
           </Card>
         ) : (
           grouped.map(({ subject, tasks: list }) => (
@@ -138,6 +112,9 @@ export default function ChildHomeScreen() {
             </View>
           ))
         )}
+        {total > 0 && (
+          <Text style={s.footerHint}>{isToday(date) ? '今天的作业' : `${displayDate(date)} 的作业`}</Text>
+        )}
       </Screen>
 
       {settingsOpen && (
@@ -147,84 +124,72 @@ export default function ChildHomeScreen() {
           onSignOut={signOut}
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
 /** 儿童端任务卡:大字 + 语音播放 */
 function ChildTaskCard({ task, server }: { task: Task; server: string }) {
-  const [playing, setPlaying] = useState(false);
-  const player = useAudioPlayer(task.has_audio && task.audio_url ? `${server}${task.audio_url}` : null);
-
-  const toggleAudio = () => {
-    if (!player) return;
-    if (playing) {
-      player.pause();
-      setPlaying(false);
-    } else {
-      player.play();
-      setPlaying(true);
-    }
-  };
-
   return (
     <Card style={s.taskCard}>
       <Text style={s.taskText}>{task.content}</Text>
-      {task.has_audio && task.audio_url && (
-        <Pressable style={s.audioBtn} onPress={toggleAudio}>
-          <Text style={s.audioBtnText}>{playing ? '⏸ 暂停语音' : '▶️ 播放语音'}</Text>
-        </Pressable>
-      )}
+      {task.has_audio && task.audio_url && <AudioButton uri={`${server}${task.audio_url}`} />}
     </Card>
   );
 }
 
+/** 语音播放按钮:只在真的有语音的任务上挂载播放器,避免每个卡片都订阅播放状态 */
+function AudioButton({ uri }: { uri: string }) {
+  const player = useAudioPlayer(uri);
+  const status = useAudioPlayerStatus(player);
+
+  const toggle = () => {
+    if (status.playing) {
+      player.pause();
+      return;
+    }
+    // 播完之后再点,从头开始(否则会停在结尾没反应)
+    const finished = status.didJustFinish || (status.duration > 0 && status.currentTime >= status.duration - 0.1);
+    if (finished) player.seekTo(0).catch(() => {});
+    player.play();
+  };
+
+  return (
+    <Pressable style={s.audioBtn} onPress={toggle}>
+      <Text style={s.audioBtnText}>
+        {status.playing ? '⏸ 暂停语音' : status.currentTime > 0 ? '↻ 再听一次' : '▶️ 播放语音'}
+      </Text>
+    </Pressable>
+  );
+}
+
 const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
+  headerInner: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   topbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: spacing(2),
-    paddingVertical: spacing(1.5),
+    paddingTop: spacing(1.5),
+    paddingBottom: spacing(1),
+    gap: spacing(1),
   },
-  navBtn: {
-    backgroundColor: colors.card,
-    borderRadius: 12,
+  topTitle: { fontSize: 24, fontWeight: '800', color: colors.text },
+  topSub: { fontSize: 13, color: colors.textSub, marginTop: 2 },
+  topBtn: {
     paddingHorizontal: spacing(1.5),
     paddingVertical: spacing(1),
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  navBtnText: { fontSize: 15, color: colors.primary, fontWeight: '600' },
-  dateText: { fontSize: 26, fontWeight: '800', color: colors.text },
-  weekText: { fontSize: 13, color: colors.textSub, marginTop: 2 },
-  quickRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing(0.8),
-    paddingHorizontal: spacing(2),
-    paddingBottom: spacing(1.5),
-  },
-  quickBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    borderRadius: 10,
     backgroundColor: colors.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  quickBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  quickBtnText: { fontSize: 15, color: colors.text, fontWeight: '600' },
-  quickBtnTextActive: { color: '#fff' },
-  quickDot: {
-    position: 'absolute',
-    bottom: 5,
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: colors.warn,
+  topBtnText: { fontSize: 15, color: colors.primary, fontWeight: '700' },
+  offline: {
+    color: colors.warn,
+    fontSize: 12,
+    paddingHorizontal: spacing(2),
+    paddingBottom: spacing(0.5),
   },
   subjectHeader: {
     flexDirection: 'row',
@@ -249,4 +214,5 @@ const s = StyleSheet.create({
     paddingVertical: spacing(0.8),
   },
   audioBtnText: { color: colors.primaryDark, fontSize: 14, fontWeight: '700' },
+  footerHint: { textAlign: 'center', color: colors.textSub, fontSize: 12, marginTop: spacing(1) },
 });

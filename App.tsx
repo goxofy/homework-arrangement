@@ -26,6 +26,15 @@ function Root() {
     loadServerHint().then(setServerHint);
   }, []);
 
+  // 离开家长端(切换成儿童端 / 退出房间)时关掉家长端的弹层,
+  // 否则以后再回到家长端会莫名其妙地弹出来
+  useEffect(() => {
+    if (identity?.role !== 'parent') {
+      setSubjectsOpen(false);
+      setSettingsOpen(false);
+    }
+  }, [identity?.role]);
+
   const changeServerHint = (v: string) => {
     setServerHint(v);
     saveServerHint(v.trim()).catch(() => {});

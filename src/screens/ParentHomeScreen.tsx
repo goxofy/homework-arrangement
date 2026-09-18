@@ -1,18 +1,21 @@
-// 家长端首页:当日作业(按分组分区)+ 添加/编辑任务(文字为主,语音辅助转写)+ 分组配置入口。
+// 家长端首页:按分组展示某一天的作业(可翻阅历史日期)+ 添加/编辑任务(文字为主,语音辅助)+ 分组配置入口。
 
 import React, { useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  Alert,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button, Card, Empty, Screen, SectionTitle } from '../ui';
-import { colors, spacing, radius } from '../theme';
+  Button,
+  Card,
+  CONTENT_MAX_WIDTH,
+  DateNav,
+  Empty,
+  Overlay,
+  Screen,
+  SectionTitle,
+  TopBar,
+  TopBarAction,
+} from '../ui';
+import { colors, spacing } from '../theme';
 import { useApp } from '../AppContext';
 import { displayDate, todayStr } from '../dates';
 import type { Subject, Task } from '../storage';
@@ -36,13 +39,24 @@ export default function ParentHomeScreen({
     removeTask,
     refreshTasks,
   } = useApp();
+  const insets = useSafeAreaInsets();
 
-  const today = todayStr();
-  const tasks = tasksByDate[today] ?? [];
-  const loading = !!loadingDates[today];
-
+  const [date, setDate] = useState(todayStr());
   const [addOpen, setAddOpen] = useState(false);
+  const [presetSubjectId, setPresetSubjectId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Task | null>(null);
+
+  const tasks = tasksByDate[date] ?? [];
+  const loading = !!loadingDates[date];
+
+  // 用 ref 拿最新的 refreshTasks,避免把它的身份写进依赖(它会随数据变化而变,否则会无限刷新)
+  const refreshRef = useRef(refreshTasks);
+  refreshRef.current = refreshTasks;
+
+  const changeDate = (next: string) => {
+    setDate(next);
+    refreshRef.current(next).catch(() => {});
+  };
 
   const activeSubjects = useMemo(() => subjects.filter((s) => !s.archived), [subjects]);
 
@@ -57,17 +71,29 @@ export default function ParentHomeScreen({
     return map;
   }, [activeSubjects, tasks]);
 
+  const openAdd = (subjectId?: string) => {
+    setPresetSubjectId(subjectId ?? null);
+    setAddOpen(true);
+  };
+
+  const isTodayDate = date === todayStr();
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top', 'bottom']}>
-      {/* 顶部栏 */}
-      <View style={s.topbar}>
-        <View>
-          <Text style={s.topTitle}>今日作业</Text>
-          <Text style={s.topSub}>
-            {displayDate(today)} · 房间 {identity?.roomCode ?? '-'}
-          </Text>
-        </View>
-        <View style={s.topBtns}>
+    // 根节点不加安全区 padding,弹层(Overlay)才能覆盖整个屏幕
+    <View style={s.root}>
+      <View style={{ paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }}>
+        {/* 大屏(横屏 iPad)下与列表保持同样的居中宽度 */}
+        <View style={s.headerInner}>
+        {/* 顶部栏:分组 / 设置 是唯一入口(底部不再重复一个「分组配置」) */}
+        <View style={s.topbar}>
+          <View style={{ flex: 1, paddingRight: spacing(1) }}>
+            <Text style={s.topTitle} numberOfLines={1}>
+              今日作业
+            </Text>
+            <Text style={s.topSub} numberOfLines={1}>
+              家长端 · 房间 {identity?.roomCode ?? '-'}
+            </Text>
+          </View>
           <Pressable style={s.topBtn} onPress={onOpenSubjects}>
             <Text style={s.topBtnText}>分组</Text>
           </Pressable>
@@ -75,17 +101,28 @@ export default function ParentHomeScreen({
             <Text style={s.topBtnText}>设置</Text>
           </Pressable>
         </View>
-      </View>
-      {!connected && (
-        <Text style={s.offline}>● 未连接同步服务,改动可能不同步到孩子设备</Text>
-      )}
+        {!connected && (
+          <Text style={s.offline}>● 未连接同步服务,改动可能不同步到孩子设备</Text>
+        )}
 
-      <Screen>
+        {/* 日期导航:家长端也能翻阅历史日期(和儿童端一致,不能翻到未来) */}
+        <DateNav
+          date={date}
+          onChange={changeDate}
+          marks={(d) => (tasksByDate[d]?.length ?? 0) > 0}
+        />
+        </View>
+      </View>
+
+      {/* 顶部/底部栏已经各自让开了状态栏和手势条 */}
+      <Screen edges={['left', 'right']}>
         {loading && tasks.length === 0 ? (
           <Empty text="加载中…" />
         ) : tasks.length === 0 ? (
           <Card>
-            <Empty text="今天还没有布置作业 🎈 点下方按钮添加" />
+            <Empty
+              text={isTodayDate ? '今天还没有布置作业 🎈 点下方按钮添加' : `${displayDate(date)} 没有作业`}
+            />
           </Card>
         ) : (
           activeSubjects.map((sub) => {
@@ -95,7 +132,7 @@ export default function ParentHomeScreen({
               <View key={sub.id} style={{ marginBottom: spacing(2) }}>
                 <SectionTitle
                   right={
-                    <Pressable onPress={() => setAddOpen(true)}>
+                    <Pressable onPress={() => openAdd(sub.id)} hitSlop={8}>
                       <Text style={s.addInline}>+ 添加</Text>
                     </Pressable>
                   }>
@@ -114,7 +151,7 @@ export default function ParentHomeScreen({
                         {
                           text: '删除',
                           style: 'destructive',
-                          onPress: () => removeTask(t.id, today).catch(() => {}),
+                          onPress: () => removeTask(t.id, date).catch(() => {}),
                         },
                       ])
                     }
@@ -125,21 +162,31 @@ export default function ParentHomeScreen({
           })
         )}
         {tasks.length > 0 && (
-          <Text style={s.totalHint}>共 {tasks.length} 条作业 · 孩子的 iPad 上会实时更新</Text>
+          <Text style={s.totalHint}>
+            共 {tasks.length} 条作业 · 孩子的 iPad 上会实时更新
+          </Text>
         )}
       </Screen>
 
       {/* 底部操作:文字添加为主 */}
-      <View style={s.bottomBar}>
-        <Button title="＋ 添加作业" onPress={() => setAddOpen(true)} style={{ flex: 1.4 }} />
-        <Button title="分组配置" variant="ghost" onPress={onOpenSubjects} style={{ flex: 1 }} />
+      <View
+        style={[
+          s.bottomBar,
+          {
+            paddingBottom: spacing(2) + insets.bottom,
+            paddingLeft: spacing(2) + insets.left,
+            paddingRight: spacing(2) + insets.right,
+          },
+        ]}>
+        <Button title="＋ 添加作业" onPress={() => openAdd()} style={{ flex: 1 }} />
       </View>
 
-      {/* 添加作业弹窗:文字输入为主,可选语音转写辅助 */}
+      {/* 添加作业弹层:文字输入为主,可选语音转写辅助 */}
       <AddTaskModal
         visible={addOpen}
         subjects={activeSubjects}
-        date={today}
+        date={date}
+        initial={presetSubjectId ? { subject_id: presetSubjectId, content: '' } : undefined}
         onClose={() => setAddOpen(false)}
         onSubmit={async (payload) => {
           await addTask(payload);
@@ -147,23 +194,23 @@ export default function ParentHomeScreen({
         }}
       />
 
-      {/* 编辑作业弹窗(仅文字修改) */}
+      {/* 编辑作业弹层(仅文字修改) */}
       <AddTaskModal
         visible={!!editing}
         subjects={activeSubjects}
-        date={today}
+        date={date}
         title="编辑作业"
         allowVoice={false}
         initial={editing ? { subject_id: editing.subject_id, content: editing.content } : undefined}
         onClose={() => setEditing(null)}
         onSubmit={async (payload) => {
           if (editing) {
-            await editTask(editing.id, { content: payload.content, subject_id: payload.subject_id }, today);
+            await editTask(editing.id, { content: payload.content, subject_id: payload.subject_id }, date);
           }
           setEditing(null);
         }}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -199,10 +246,10 @@ export function TaskRow({
       </View>
       {!readOnly && (
         <View style={s.taskActions}>
-          <Pressable onPress={onEdit} hitSlop={8}>
+          <Pressable onPress={onEdit} hitSlop={10}>
             <Text style={s.editBtn}>编辑</Text>
           </Pressable>
-          <Pressable onPress={onDelete} hitSlop={8}>
+          <Pressable onPress={onDelete} hitSlop={10}>
             <Text style={s.delBtn}>删除</Text>
           </Pressable>
         </View>
@@ -212,7 +259,7 @@ export function TaskRow({
 }
 
 /**
- * 添加/编辑作业弹窗:
+ * 添加/编辑作业弹层:
  * - 文字输入是主入口,始终可编辑
  * - 语音是辅助:点麦克风开始识别,识别出的文字会追加到输入框,可继续手动修改
  */
@@ -235,8 +282,8 @@ export function AddTaskModal({
   onClose: () => void;
   onSubmit: (payload: { date: string; subject_id: string; content: string }) => Promise<void>;
 }) {
-  const [subjectId, setSubjectId] = useState<string>('');
-  const [content, setContent] = useState('');
+  const [subjectId, setSubjectId] = useState<string>(initial?.subject_id || subjects[0]?.id || '');
+  const [content, setContent] = useState(initial?.content ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 本次识别开始前的已有文字,最终转写会追加在它后面
@@ -266,6 +313,9 @@ export function AddTaskModal({
     speech.start().catch(() => {});
   };
 
+  // 关闭时一定要停掉麦克风,否则会一直占用录音
+  React.useEffect(() => () => speech.cancel(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const canSubmit = !!subjectId && content.trim().length > 0 && !busy;
 
   const submit = async () => {
@@ -280,103 +330,94 @@ export function AddTaskModal({
     }
   };
 
+  if (!visible) return null;
+
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top', 'bottom']}>
-        <View style={s.modalBar}>
-          <Pressable onPress={onClose} hitSlop={10}>
-            <Text style={s.modalClose}>取消</Text>
-          </Pressable>
-          <Text style={s.modalTitle}>
-            {title} · {displayDate(date)}
-          </Text>
-          <View style={{ width: 40 }} />
-        </View>
+    <Overlay
+      onRequestClose={onClose}
+      bar={
+        // 保存放在顶部栏:键盘弹起时也一定点得到(底部按钮可能被键盘盖住)
+        <TopBar
+          title={`${title} · ${displayDate(date)}`}
+          left={<TopBarAction title="取消" tone="sub" onPress={onClose} />}
+          right={<TopBarAction title="保存" onPress={submit} disabled={!canSubmit} />}
+        />
+      }>
+      <Screen>
+        <Card style={{ gap: spacing(2) }}>
+          <Text style={s.label}>选择分组</Text>
+          <View style={s.chipWrap}>
+            {subjects.map((sub) => {
+              const active = sub.id === subjectId;
+              return (
+                <Pressable
+                  key={sub.id}
+                  onPress={() => setSubjectId(sub.id)}
+                  style={[
+                    s.chip,
+                    active && {
+                      backgroundColor: sub.color ?? colors.primary,
+                      borderColor: sub.color ?? colors.primary,
+                    },
+                  ]}>
+                  <Text style={[s.chipText, active && { color: '#fff' }]}>{sub.name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
 
-        <Screen>
-          <Card style={{ gap: spacing(2) }}>
-            <Text style={s.label}>选择分组</Text>
-            <View style={s.chipWrap}>
-              {subjects.map((sub) => {
-                const active = sub.id === subjectId;
-                return (
-                  <Pressable
-                    key={sub.id}
-                    onPress={() => setSubjectId(sub.id)}
-                    style={[
-                      s.chip,
-                      active && {
-                        backgroundColor: sub.color ?? colors.primary,
-                        borderColor: sub.color ?? colors.primary,
-                      },
-                    ]}>
-                    <Text style={[s.chipText, active && { color: '#fff' }]}>{sub.name}</Text>
-                  </Pressable>
-                );
-              })}
+          <Text style={s.label}>作业内容</Text>
+          {/* 输入框放在页面靠上位置:键盘弹出也不会遮住 */}
+          <TextInput
+            style={[s.input, { minHeight: 100 }]}
+            value={content}
+            onChangeText={setContent}
+            multiline
+            placeholder="手动输入作业内容,例如:数学口算第 12 页 1~20 题"
+            placeholderTextColor={colors.textSub}
+          />
+
+          {allowVoice && (
+            <View style={s.voiceBox}>
+              {speech.recognizing ? (
+                <>
+                  <Text style={s.voiceHint}>🎙️ 正在聆听…说完点「完成」,文字会追加到上面输入框</Text>
+                  {!!speech.transcript && <Text style={s.voiceLive}>{speech.transcript}</Text>}
+                  <Button title="完成" variant="soft" small onPress={speech.stop} style={{ alignSelf: 'center' }} />
+                </>
+              ) : (
+                <Button title="🎤 说话转文字(可选)" variant="soft" onPress={startSpeech} />
+              )}
+              {speech.error && <Text style={s.error}>{speech.error}</Text>}
+              <Text style={s.hint}>直接打字即可;语音只是辅助,识别结果保存前可任意修改。</Text>
             </View>
+          )}
 
-            <Text style={s.label}>作业内容</Text>
-            <TextInput
-              style={[s.input, { minHeight: 100 }]}
-              value={content}
-              onChangeText={setContent}
-              multiline
-              autoFocus={!allowVoice}
-              placeholder="手动输入作业内容,例如:数学口算第 12 页 1~20 题"
-              placeholderTextColor={colors.textSub}
-            />
-
-            {allowVoice && (
-              <View style={s.voiceBox}>
-                {speech.recognizing ? (
-                  <>
-                    <Text style={s.voiceHint}>🎙️ 正在聆听…说完点「完成」,文字会追加到上面输入框</Text>
-                    {!!speech.transcript && <Text style={s.voiceLive}>{speech.transcript}</Text>}
-                    <Button title="完成" variant="soft" small onPress={speech.stop} style={{ alignSelf: 'center' }} />
-                  </>
-                ) : (
-                  <Button title="🎤 说话转文字(可选)" variant="soft" onPress={startSpeech} />
-                )}
-                {speech.error && <Text style={s.error}>{speech.error}</Text>}
-                <Text style={s.hint}>
-                  直接打字即可;语音只是辅助,识别结果保存前可任意修改。
-                </Text>
-              </View>
-            )}
-
-            {error && <Text style={s.error}>{error}</Text>}
-
-            <View style={{ flexDirection: 'row', gap: spacing(1.5) }}>
-              <View style={{ flex: 1 }}>
-                <Button title="保存作业" onPress={submit} disabled={!canSubmit} loading={busy} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Button title="取消" variant="ghost" onPress={onClose} />
-              </View>
-            </View>
-          </Card>
-        </Screen>
-      </SafeAreaView>
-    </Modal>
+          {error && <Text style={s.error}>{error}</Text>}
+          {busy && <Text style={s.hint}>保存中…</Text>}
+        </Card>
+      </Screen>
+    </Overlay>
   );
 }
 
 const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
+  headerInner: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   topbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: spacing(2),
-    paddingVertical: spacing(1.5),
-    backgroundColor: colors.bg,
+    paddingTop: spacing(1.5),
+    paddingBottom: spacing(1),
+    gap: spacing(1),
   },
   topTitle: { fontSize: 24, fontWeight: '800', color: colors.text },
   topSub: { fontSize: 13, color: colors.textSub, marginTop: 2 },
   topBtns: { flexDirection: 'row', gap: spacing(1) },
   topBtn: {
     paddingHorizontal: spacing(1.5),
-    paddingVertical: spacing(0.8),
+    paddingVertical: spacing(1),
     borderRadius: 10,
     backgroundColor: colors.card,
     borderWidth: StyleSheet.hairlineWidth,
@@ -387,7 +428,7 @@ const s = StyleSheet.create({
     color: colors.warn,
     fontSize: 12,
     paddingHorizontal: spacing(2),
-    paddingBottom: spacing(1),
+    paddingBottom: spacing(0.5),
   },
   addInline: { color: colors.primary, fontSize: 14, fontWeight: '600' },
   countText: { color: colors.textSub, fontSize: 13, fontWeight: '400' },
@@ -403,25 +444,11 @@ const s = StyleSheet.create({
   delBtn: { color: colors.danger, fontSize: 13, fontWeight: '600' },
   totalHint: { textAlign: 'center', color: colors.textSub, fontSize: 12, marginTop: spacing(1) },
   bottomBar: {
-    flexDirection: 'row',
-    gap: spacing(1.5),
-    padding: spacing(2),
+    paddingTop: spacing(2),
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
     backgroundColor: colors.card,
   },
-  modalBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing(2),
-    paddingVertical: spacing(1.5),
-    backgroundColor: colors.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  modalClose: { color: colors.primary, fontSize: 16 },
-  modalTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
   label: { fontSize: 14, fontWeight: '600', color: colors.text },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(1) },
   chip: {

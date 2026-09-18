@@ -1,9 +1,9 @@
-// 首次启动:选择身份(家长 / 儿童)+ 服务器地址(记住,之后可在设置里改)。
+// 首次启动:选择身份(家长 / 儿童)+ 服务器地址(点击弹出填写,之后可在设置里改)。
 
-import React from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button, Screen } from '../ui';
+import React, { useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { Button, SAFE_EDGES, Screen } from '../ui';
+import { ServerField, ServerPrompt } from '../ServerField';
 import { colors, spacing, radius } from '../theme';
 import type { Role } from '../storage';
 
@@ -16,10 +16,12 @@ export default function WelcomeScreen({
   server: string;
   onChangeServer: (server: string) => void;
 }) {
+  const [serverOpen, setServerOpen] = useState(false);
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      {/* 用 Screen 承载:小屏/横屏可滚动,键盘弹出时输入框不会被遮住 */}
-      <Screen center>
+    // 根节点不加安全区 padding,这样 ServerPrompt 弹层能覆盖整个屏幕
+    <View style={styles.root}>
+      <Screen edges={[...SAFE_EDGES]}>
         <View style={styles.header}>
           <Text style={styles.logo}>📚</Text>
           <Text style={styles.title}>今日作业</Text>
@@ -42,33 +44,29 @@ export default function WelcomeScreen({
           </View>
         </View>
 
-        {/* 服务器地址:一次性填写,之后记住 */}
+        {/* 服务器地址:点击弹出填写,输入框在顶部,键盘不会遮到 */}
         <View style={styles.serverBox}>
-          <Text style={styles.serverLabel}>服务器地址(家庭自建,填写一次即可)</Text>
-          <TextInput
-            style={styles.serverInput}
-            value={server}
-            onChangeText={onChangeServer}
-            placeholder="例如 192.168.1.10:8787 或 hw.example.com"
-            placeholderTextColor={colors.textSub}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            returnKeyType="done"
-          />
-          <Text style={styles.serverHint}>
-            会自动记住;之后可在「设置」中修改。不知道填什么?问一下部署这个服务的人 😊
-          </Text>
+          <ServerField value={server} onPress={() => setServerOpen(true)} />
         </View>
 
         <Text style={styles.footer}>无需注册账号,输入同一个房间号即可关联</Text>
       </Screen>
-    </SafeAreaView>
+
+      <ServerPrompt
+        visible={serverOpen}
+        value={server}
+        onSave={(v) => {
+          onChangeServer(v);
+          setServerOpen(false);
+        }}
+        onCancel={() => setServerOpen(false)}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1, backgroundColor: colors.bg },
   header: { alignItems: 'center', marginTop: spacing(2), marginBottom: spacing(3) },
   logo: { fontSize: 56, marginBottom: spacing(1) },
   title: { fontSize: 32, fontWeight: '800', color: colors.text },
@@ -85,32 +83,7 @@ const styles = StyleSheet.create({
   },
   choiceEmoji: { fontSize: 34 },
   choiceTitle: { fontSize: 20, fontWeight: '700', color: colors.text },
-  choiceDesc: { fontSize: 13, color: colors.textSub, marginBottom: spacing(0.5) },
-  serverBox: {
-    marginTop: spacing(3),
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    padding: spacing(2),
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    gap: spacing(1),
-  },
-  serverLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
-  serverInput: {
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: spacing(1.5),
-    paddingVertical: 10,
-    fontSize: 15,
-    color: colors.text,
-    backgroundColor: '#FBFCFE',
-  },
-  serverHint: { fontSize: 11, color: colors.textSub, lineHeight: 16 },
-  footer: {
-    textAlign: 'center',
-    color: colors.textSub,
-    fontSize: 12,
-    marginTop: spacing(3),
-  },
+  choiceDesc: { fontSize: 13, color: colors.textSub, marginBottom: spacing(0.5), textAlign: 'center' },
+  serverBox: { marginTop: spacing(3) },
+  footer: { textAlign: 'center', color: colors.textSub, fontSize: 12, marginTop: spacing(3) },
 });

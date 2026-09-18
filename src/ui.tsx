@@ -1,8 +1,15 @@
-// 通用小组件:屏幕容器、卡片、按钮、任务行等。
+// 通用小组件:屏幕容器、树内弹层、顶部栏、日期导航、卡片、按钮、任务行等。
+//
+// 关于「树内弹层」(Overlay)而不是 RN 的 Modal:
+// Modal 会把内容渲染进一个独立的原生窗口(Android 是 Dialog、iOS 是新的 VC),
+// 在那个窗口里 SafeAreaView 拿到的 insets 是错的(通常是 0),于是内容会顶到状态栏下面,
+// 状态栏区域还会把点击吃掉 —— 这就是「二级页面顶到最上面、完成按钮点不了」的原因。
+// Overlay 直接渲染在 App 自己的视图树里,安全区和键盘避让全部走主窗口的正确数值。
 
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Dimensions,
   Platform,
   Pressable,
@@ -15,34 +22,53 @@ import {
   ViewStyle,
   StyleProp,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, radius } from './theme';
 import { useKeyboardInset } from './keyboard';
+import { addDays, displayDate, isToday, todayStr, weekdayLabel } from './dates';
 
 /** 平板/大屏下限制内容宽度,避免卡片被拉得过宽 */
-const CONTENT_MAX_WIDTH = 720;
+export const CONTENT_MAX_WIDTH = 720;
+
+/** 统一的安全区边:上下(状态栏/手势条)+ 左右(横屏刘海/灵动岛) */
+export const SAFE_EDGES = ['top', 'bottom', 'left', 'right'] as const;
+export type ScreenEdge = (typeof SAFE_EDGES)[number];
 
 /**
- * 页面容器。统一负责三件事:
- * 1. 底部安全区(手势条/导航栏)避让
+ * 页面容器。统一负责四件事:
+ * 1. 安全区让位(把 insets 做成内容 padding,滚动时不会被裁切)
  * 2. 键盘避让 —— Android 15+ edge-to-edge 下系统不再缩小窗口,必须自己让位
  * 3. 内容超出屏幕时可滚动(小屏手机/横屏/大字体都不会截断)
+ * 4. 大屏(平板)限宽居中
+ *
+ * 注意:安全区是加在「内容」上的,不是加在外层容器上,所以 Overlay 弹层
+ * 作为兄弟节点渲染时能覆盖整个屏幕(不会被父级 padding 缩进)。
  */
 export function Screen({
   children,
   style,
   scroll = true,
   center = false,
+  edges = [],
 }: {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   scroll?: boolean;
   center?: boolean;
+  /** 本页需要避让的安全区边(顶部有固定栏的页面通常只填 bottom/left/right) */
+  edges?: readonly ScreenEdge[];
 }) {
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
   const scrollRef = useRef<ScrollView | null>(null);
   const offsetRef = useRef(0);
+
+  const safe = {
+    top: edges.includes('top') ? insets.top : 0,
+    bottom: edges.includes('bottom') ? insets.bottom : 0,
+    left: edges.includes('left') ? insets.left : 0,
+    right: edges.includes('right') ? insets.right : 0,
+  };
 
   // Android 上窗口不会随键盘缩小(edge-to-edge 下系统不再 resize),
   // Android 平台也不会自动把聚焦的输入框滚到键盘上方,所以这里量一下它的实际位置,
@@ -70,7 +96,21 @@ export function Screen({
 
   if (!scroll) {
     return (
-      <View style={[styles.screen, shell, center && styles.screenCenter, style]}>{children}</View>
+      <View
+        style={[
+          styles.screen,
+          shell,
+          {
+            paddingTop: safe.top,
+            paddingBottom: safe.bottom,
+            paddingLeft: safe.left,
+            paddingRight: safe.right,
+          },
+          center && styles.screenCenter,
+          style,
+        ]}>
+        {children}
+      </View>
     );
   }
 
@@ -80,8 +120,13 @@ export function Screen({
       style={[styles.screenScroll, shell]}
       contentContainerStyle={[
         styles.screenContent,
-        { paddingBottom: spacing(8) + insets.bottom },
         styles.screenInner,
+        {
+          paddingTop: spacing(2) + safe.top,
+          paddingBottom: spacing(6) + safe.bottom,
+          paddingLeft: spacing(2) + safe.left,
+          paddingRight: spacing(2) + safe.right,
+        },
         center && styles.screenCenter,
         style,
       ]}
@@ -96,6 +141,151 @@ export function Screen({
       showsVerticalScrollIndicator={false}>
       {children}
     </ScrollView>
+  );
+}
+
+/**
+ * 全屏弹层(替代 RN Modal)。直接渲染在 App 视图树里,好处:
+ * - 安全区 insets 正确(状态栏/手势条/横屏左右都能让位)
+ * - 键盘避让与主页面走同一套逻辑
+ * - 可以嵌套(Modal 里再开 Modal 在 Android 上不可靠)
+ * Android 返回键会自动关闭它。
+ */
+export function Overlay({
+  children,
+  onRequestClose,
+  bar,
+  zIndex = 20,
+}: {
+  children: React.ReactNode;
+  onRequestClose: () => void;
+  bar?: React.ReactNode;
+  /** 弹层叠放顺序(同级弹层里更靠上的一层用更大的值) */
+  zIndex?: number;
+}) {
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onRequestClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [onRequestClose]);
+
+  return (
+    <View style={[styles.overlay, { zIndex, elevation: zIndex }]}>
+      <SafeAreaView style={styles.overlaySafe} edges={[...SAFE_EDGES]}>
+        {bar}
+        {children}
+      </SafeAreaView>
+    </View>
+  );
+}
+
+/** 弹层/页面顶部栏:标题居中,左右各放操作 */
+export function TopBar({
+  title,
+  left,
+  right,
+}: {
+  title?: string;
+  left?: React.ReactNode;
+  right?: React.ReactNode;
+}) {
+  return (
+    <View style={styles.topBar}>
+      <View style={styles.topBarSide}>{left}</View>
+      <Text style={styles.topBarTitle} numberOfLines={1}>
+        {title ?? ''}
+      </Text>
+      <View style={[styles.topBarSide, styles.topBarSideRight]}>{right}</View>
+    </View>
+  );
+}
+
+/** 顶部栏上的文字按钮(带足够大的点击热区,不会点不到) */
+export function TopBarAction({
+  title,
+  onPress,
+  tone = 'primary',
+  disabled,
+}: {
+  title: string;
+  onPress: () => void;
+  tone?: 'primary' | 'sub';
+  disabled?: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={14}
+      style={({ pressed }) => [styles.topBarBtn, disabled && { opacity: 0.35 }, pressed && { opacity: 0.55 }]}>
+      <Text style={[styles.topBarAction, tone === 'sub' && { color: colors.textSub }]}>{title}</Text>
+    </Pressable>
+  );
+}
+
+/**
+ * 日期导航:前一天 / 后一天 + 最近 7 天快捷条。
+ * 家长端和儿童端共用,保证两端行为一致(都不能翻到未来)。
+ */
+export function DateNav({
+  date,
+  onChange,
+  marks,
+}: {
+  date: string;
+  onChange: (date: string) => void;
+  /** 该日期是否有作业(会在快捷条上显示小圆点) */
+  marks?: (date: string) => boolean;
+}) {
+  const today = todayStr();
+  const canNext = date < today;
+  const list = [6, 5, 4, 3, 2, 1, 0].map((back) => addDays(today, -back));
+
+  const shift = (delta: number) => {
+    const next = addDays(date, delta);
+    if (next > today) return;
+    onChange(next);
+  };
+
+  return (
+    <View style={styles.dateNav}>
+      <View style={styles.dateNavTop}>
+        <Pressable style={styles.navBtn} onPress={() => shift(-1)}>
+          <Text style={styles.navBtnText}>‹ 前一天</Text>
+        </Pressable>
+        <View style={styles.dateCenter}>
+          <Text style={styles.dateTitle} numberOfLines={1}>
+            {isToday(date) ? '今天' : displayDate(date)}
+          </Text>
+          <Text style={styles.dateSub} numberOfLines={1}>
+            {isToday(date) ? displayDate(date) : weekdayLabel(date)}
+          </Text>
+        </View>
+        <Pressable style={[styles.navBtn, !canNext && styles.navBtnDisabled]} disabled={!canNext} onPress={() => shift(1)}>
+          <Text style={[styles.navBtnText, !canNext && { color: colors.textSub }]}>后一天 ›</Text>
+        </Pressable>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.quickRow}>
+        {list.map((d) => {
+          const active = d === date;
+          const has = marks?.(d) ?? false;
+          return (
+            <Pressable key={d} style={[styles.quickBtn, active && styles.quickBtnActive]} onPress={() => onChange(d)}>
+              <Text style={[styles.quickBtnText, active && styles.quickBtnTextActive]}>
+                {isToday(d) ? '今' : weekdayLabel(d).replace('周', '')}
+              </Text>
+              {has && !active && <View style={styles.quickDot} />}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -202,10 +392,87 @@ export function ErrorBar({ message, onRetry }: { message: string; onRetry?: () =
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   screenScroll: { flex: 1, backgroundColor: colors.bg },
-  screenContent: { padding: spacing(2), paddingBottom: spacing(8), flexGrow: 1 },
+  // 内边距(含安全区)在 Screen 里按 edges 动态计算
+  screenContent: { flexGrow: 1 },
   // 大屏(平板/横屏)下内容居中限宽,小屏不受影响
   screenInner: { width: '100%', maxWidth: CONTENT_MAX_WIDTH, alignSelf: 'center' },
   screenCenter: { justifyContent: 'center' },
+
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.bg,
+  },
+  overlaySafe: { flex: 1, backgroundColor: colors.bg },
+
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 50,
+    paddingHorizontal: spacing(1),
+    backgroundColor: colors.card,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  topBarSide: { minWidth: 72, justifyContent: 'center' },
+  topBarSideRight: { alignItems: 'flex-end' },
+  topBarTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: colors.text },
+  topBarBtn: { paddingHorizontal: spacing(1.2), paddingVertical: spacing(0.6) },
+  topBarAction: { fontSize: 16, fontWeight: '600', color: colors.primary },
+
+  dateNav: { paddingTop: spacing(1.5) },
+  dateNavTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing(2),
+    gap: spacing(1),
+  },
+  navBtn: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    paddingHorizontal: spacing(1.5),
+    paddingVertical: spacing(1),
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  navBtnDisabled: { opacity: 0.5 },
+  navBtnText: { fontSize: 15, color: colors.primary, fontWeight: '600' },
+  dateCenter: { flex: 1, alignItems: 'center' },
+  dateTitle: { fontSize: 22, fontWeight: '800', color: colors.text },
+  dateSub: { fontSize: 12, color: colors.textSub, marginTop: 2 },
+  quickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing(0.8),
+    paddingHorizontal: spacing(2),
+    paddingVertical: spacing(1.5),
+  },
+  quickBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: colors.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  quickBtnText: { fontSize: 15, color: colors.text, fontWeight: '600' },
+  quickBtnTextActive: { color: '#fff' },
+  quickDot: {
+    position: 'absolute',
+    bottom: 5,
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.warn,
+  },
+
   card: {
     backgroundColor: colors.card,
     borderRadius: radius,

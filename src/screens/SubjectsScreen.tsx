@@ -1,9 +1,8 @@
 // 分组配置页(家长):新增/重命名/归档分组,配置对所有日期持续生效。
 
 import React, { useState } from 'react';
-import { Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button, Card, Screen } from '../ui';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Button, Card, Overlay, Screen, TopBar, TopBarAction } from '../ui';
 import { colors, spacing, subjectPalette } from '../theme';
 import { useApp } from '../AppContext';
 import type { Subject } from '../storage';
@@ -54,17 +53,12 @@ export default function SubjectsScreen({ onClose }: { onClose: () => void }) {
     ]);
 
   return (
-    <Modal visible animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['top', 'bottom']}>
-        <View style={s.modalBar}>
-          <Pressable onPress={onClose} hitSlop={10}>
-            <Text style={s.modalClose}>完成</Text>
-          </Pressable>
-          <Text style={s.modalTitle}>作业分组</Text>
-          <View style={{ width: 40 }} />
-        </View>
-
-        <Screen>
+    <Overlay
+      onRequestClose={onClose}
+      bar={
+        <TopBar title="作业分组" left={<TopBarAction title="完成" onPress={onClose} />} />
+      }>
+      <Screen>
           <Text style={s.hint}>
             分组设置好后,之后每天布置作业都可以直接使用(语文 / 数学 / 英语 / 其他 已默认创建)。
           </Text>
@@ -127,25 +121,12 @@ export default function SubjectsScreen({ onClose }: { onClose: () => void }) {
             </View>
             {error && <Text style={s.error}>{error}</Text>}
           </Card>
-        </Screen>
-      </SafeAreaView>
-    </Modal>
+      </Screen>
+    </Overlay>
   );
 }
 
 const s = StyleSheet.create({
-  modalBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing(2),
-    paddingVertical: spacing(1.5),
-    backgroundColor: colors.card,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  modalClose: { color: colors.primary, fontSize: 16, fontWeight: '600' },
-  modalTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
   hint: { fontSize: 13, color: colors.textSub, lineHeight: 19 },
   label: { fontSize: 14, fontWeight: '600', color: colors.text },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.2), paddingVertical: spacing(1) },

@@ -22,7 +22,7 @@ import {
   type Subject,
   type Task,
 } from './storage';
-import { todayStr } from './dates';
+import { addDays, todayStr } from './dates';
 
 const WS_BACKOFF_MAX = 15000;
 
@@ -85,6 +85,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // 预取最近几天(日期切换即时可见,日期条上的小圆点也才准)。
+  // 服务器不可达时立即停止,不做无意义的连锁请求。
+  const prefetchRecentDays = useCallback(
+    async (id: Identity) => {
+      const today = todayStr();
+      for (let i = 1; i <= 6; i++) {
+        try {
+          await fetchTasks(id, addDays(today, -i));
+        } catch {
+          return;
+        }
+      }
+    },
+    [fetchTasks]
+  );
+
   // 初始化:读本地身份
   useEffect(() => {
     (async () => {
@@ -94,13 +110,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         try {
           await fetchSubjects(id);
           await fetchTasks(id, todayStr());
+          prefetchRecentDays(id); // 后台预取,不阻塞启动
         } catch {
           // 服务器暂时不可达也允许进入,界面会提示重试
         }
       }
       setReady(true);
     })();
-  }, [fetchSubjects, fetchTasks]);
+  }, [fetchSubjects, fetchTasks, prefetchRecentDays]);
 
   // WebSocket 同步
   const connectWs = useCallback((id: Identity) => {
@@ -183,7 +200,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     knownDatesRef.current = new Set();
     await fetchSubjects(id);
     await fetchTasks(id, todayStr());
-  }, [fetchSubjects, fetchTasks]);
+    prefetchRecentDays(id);
+  }, [fetchSubjects, fetchTasks, prefetchRecentDays]);
 
   const updateIdentity = useCallback(
     async (patch: Partial<Identity>) => {
@@ -196,10 +214,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         knownDatesRef.current = new Set();
         await fetchSubjects(next).catch(() => {});
         await fetchTasks(next, todayStr()).catch(() => {});
+        prefetchRecentDays(next);
       }
       setIdentity(next);
     },
-    [identity, fetchSubjects, fetchTasks]
+    [identity, fetchSubjects, fetchTasks, prefetchRecentDays]
   );
 
   const signOut = useCallback(async () => {
