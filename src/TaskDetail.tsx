@@ -13,6 +13,7 @@ import type { Task } from './storage';
 
 export function TaskDetail({
   task,
+  visible = true,
   subjectName,
   subjectColor,
   date,
@@ -22,6 +23,8 @@ export function TaskDetail({
   footer,
 }: {
   task: Task;
+  /** 显隐开关(父级常驻渲染本组件,关闭时传 false,退场动画播完才卸载) */
+  visible?: boolean;
   subjectName: string;
   subjectColor?: string | null;
   /** 这条作业归属的日期(YYYY-MM-DD) */
@@ -54,9 +57,11 @@ export function TaskDetail({
   return (
     <Overlay
       zIndex={30}
+      visible={visible}
       onRequestClose={onClose}
       bar={
         <TopBar
+          flat
           title="作业详情"
           left={<TopBarAction title="关闭" tone="sub" onPress={onClose} />}
           right={onEdit ? <TopBarAction title="编辑" onPress={onEdit} /> : undefined}

@@ -53,7 +53,14 @@ export default function ParentHomeScreen({
   const [addOpen, setAddOpen] = useState(false);
   const [presetSubjectId, setPresetSubjectId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Task | null>(null);
-  const [detailOf, setDetailOf] = useState<Task | null>(null);
+  // 详情弹层:task 留着不置空,这样关闭时退场动画期间内容还在,不会闪空
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+
+  const openDetail = (t: Task) => {
+    setDetailTask(t);
+    setDetailOpen(true);
+  };
 
   const tasks = tasksByDate[date] ?? [];
   const loading = !!loadingDates[date];
@@ -92,7 +99,7 @@ export default function ParentHomeScreen({
 
   // 详情里点「编辑」:关掉详情再开编辑弹层
   const openEditFromDetail = (task: Task) => {
-    setDetailOf(null);
+    setDetailOpen(false);
     setEditing(task);
   };
 
@@ -156,7 +163,7 @@ export default function ParentHomeScreen({
                   <TaskRow
                     key={t.id}
                     task={t}
-                    onOpen={() => setDetailOf(t)}
+                    onOpen={() => openDetail(t)}
                     onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
                     onEdit={() => setEditing(t)}
                     onDelete={() =>
@@ -227,15 +234,16 @@ export default function ParentHomeScreen({
       />
 
       {/* 详情弹层:点任务文字进来,看完整内容 / 勾选完成 / 编辑 / 删除 */}
-      {detailOf && (
+      {detailTask && (
         <TaskDetail
-          task={detailOf}
-          subjectName={subjectName(detailOf.subject_id)}
-          subjectColor={detailOf.subject_color}
+          task={detailTask}
+          visible={detailOpen}
+          subjectName={subjectName(detailTask.subject_id)}
+          subjectColor={detailTask.subject_color}
           date={date}
-          onClose={() => setDetailOf(null)}
-          onEdit={() => openEditFromDetail(detailOf)}
-          onDelete={() => removeTask(detailOf.id, date).catch(() => {})}
+          onClose={() => setDetailOpen(false)}
+          onEdit={() => openEditFromDetail(detailTask)}
+          onDelete={() => removeTask(detailTask.id, date).catch(() => {})}
         />
       )}
     </View>
@@ -360,7 +368,6 @@ export function AddTaskModal({
   React.useEffect(() => () => speech.cancel(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const canSubmit = !!subjectId && content.trim().length > 0 && !busy;
-
   const submit = async () => {
     setBusy(true);
     setError(null);
@@ -373,14 +380,16 @@ export function AddTaskModal({
     }
   };
 
-  if (!visible) return null;
-
   return (
+    // 常驻渲染 + visible:关闭时先播退场动画,所以这里不能提前 return null
     <Overlay
+      visible={visible}
       onRequestClose={onClose}
       bar={
         // 保存放在顶部栏:键盘弹起时也一定点得到(底部按钮可能被键盘盖住)
+        // flat:与首页同色,避免顶部白条和下面浅灰内容之间出现割裂的色带
         <TopBar
+          flat
           title={`${title} · ${displayDate(date)}`}
           left={<TopBarAction title="取消" tone="sub" onPress={onClose} />}
           right={<TopBarAction title="保存" onPress={submit} disabled={!canSubmit} />}
@@ -412,9 +421,9 @@ export function AddTaskModal({
           </View>
 
           <Text style={[s.label, { fontSize: fs(14) }]}>作业内容</Text>
-          {/* 输入框放在页面靠上位置:键盘弹出也不会遮住 */}
+          {/* 输入框放在页面靠上位置:键盘弹出也不会遮住;高度给足,长作业不用边写边滚 */}
           <TextInput
-            style={[s.input, { minHeight: 100, fontSize: fs(16) }]}
+            style={[s.input, { minHeight: 132, fontSize: fs(16) }]}
             value={content}
             onChangeText={setContent}
             multiline
@@ -534,8 +543,9 @@ const s = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: 10,
-    padding: spacing(1.5),
+    padding: spacing(1.75),
     fontSize: 16,
+    lineHeight: 24,
     color: colors.text,
     backgroundColor: '#FBFCFE',
     textAlignVertical: 'top',

@@ -11,10 +11,12 @@ import { ServerField, ServerPrompt } from '../ServerField';
 import JoinRoomScreen from './JoinRoomScreen';
 
 export default function SettingsScreen({
+  visible = true,
   onClose,
   onUpdateServer,
   onSignOut,
 }: {
+  visible?: boolean;
   onClose: () => void;
   onUpdateServer: (patch: Partial<Identity>) => Promise<void>;
   onSignOut: () => Promise<void>;
@@ -62,36 +64,13 @@ export default function SettingsScreen({
       { text: '退出', style: 'destructive', onPress: () => onSignOut().catch(() => {}) },
     ]);
 
-  // 更换房间:整屏切到加入房间流程(已经在弹层里,所以 JoinRoomScreen 不再重复让位安全区)
-  if (mode === 'join' && identity) {
-    return (
-      <Overlay
-        onRequestClose={() => setMode('main')}
-        bar={
-          <TopBar
-            title="更换房间"
-            left={<TopBarAction title="返回" tone="sub" onPress={() => setMode('main')} />}
-          />
-        }>
-        <JoinRoomScreen
-          role={identity.role}
-          initialServer={identity.server}
-          safe={false}
-          onJoined={async (srv, code) => {
-            await onUpdateServer({ server: srv, roomCode: code });
-            setMode('main');
-          }}
-          onBack={() => setMode('main')}
-        />
-      </Overlay>
-    );
-  }
-
+  // 主设置页与「更换房间」页都常驻渲染 + visible:切换时一个退场、一个进场,不会硬切
   return (
     <>
       <Overlay
+        visible={visible && mode === 'main'}
         onRequestClose={onClose}
-        bar={<TopBar title="设置" left={<TopBarAction title="完成" onPress={onClose} />} />}>
+        bar={<TopBar flat title="设置" left={<TopBarAction title="完成" onPress={onClose} />} />}>
         <Screen>
           {identity && (
             <>
@@ -156,6 +135,31 @@ export default function SettingsScreen({
           )}
         </Screen>
       </Overlay>
+
+      {/* 更换房间:整屏切到加入房间流程(已经在弹层里,所以 JoinRoomScreen 不再重复让位安全区) */}
+      {identity && (
+        <Overlay
+          visible={visible && mode === 'join'}
+          onRequestClose={() => setMode('main')}
+          bar={
+            <TopBar
+              flat
+              title="更换房间"
+              left={<TopBarAction title="返回" tone="sub" onPress={() => setMode('main')} />}
+            />
+          }>
+          <JoinRoomScreen
+            role={identity.role}
+            initialServer={identity.server}
+            safe={false}
+            onJoined={async (srv, code) => {
+              await onUpdateServer({ server: srv, roomCode: code });
+              setMode('main');
+            }}
+            onBack={() => setMode('main')}
+          />
+        </Overlay>
+      )}
 
       {/* 与上层弹层平级渲染(不要嵌套,否则安全区会让位两次) */}
       <ServerPrompt

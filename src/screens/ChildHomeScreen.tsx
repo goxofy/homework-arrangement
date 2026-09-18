@@ -33,7 +33,14 @@ export default function ChildHomeScreen() {
 
   const [date, setDate] = useState(todayStr());
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [detailOf, setDetailOf] = useState<Task | null>(null);
+  // 详情弹层:task 留着不置空,这样关闭时退场动画期间内容还在,不会闪空
+  const [detailTask, setDetailTask] = useState<Task | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+
+  const openDetail = (t: Task) => {
+    setDetailTask(t);
+    setDetailOpen(true);
+  };
 
   const tasks = tasksByDate[date] ?? [];
   const loading = !!loadingDates[date];
@@ -122,7 +129,7 @@ export default function ChildHomeScreen() {
                   key={t.id}
                   task={t}
                   server={identity?.server ?? ''}
-                  onOpen={() => setDetailOf(t)}
+                  onOpen={() => openDetail(t)}
                   onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
                 />
               ))}
@@ -137,25 +144,26 @@ export default function ChildHomeScreen() {
         )}
       </Screen>
 
-      {settingsOpen && (
-        <SettingsScreen
-          onClose={() => setSettingsOpen(false)}
-          onUpdateServer={updateIdentity}
-          onSignOut={signOut}
-        />
-      )}
+      {/* 常驻渲染 + visible:只有这样才能播退场动画 */}
+      <SettingsScreen
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onUpdateServer={updateIdentity}
+        onSignOut={signOut}
+      />
 
       {/* 详情弹层:点任务文字看完整内容 / 勾选完成 / 播放语音 */}
-      {detailOf && (
+      {detailTask && (
         <TaskDetail
-          task={detailOf}
-          subjectName={subjectNameOf(detailOf)}
-          subjectColor={detailOf.subject_color}
+          task={detailTask}
+          visible={detailOpen}
+          subjectName={subjectNameOf(detailTask)}
+          subjectColor={detailTask.subject_color}
           date={date}
-          onClose={() => setDetailOf(null)}
+          onClose={() => setDetailOpen(false)}
           footer={
-            detailOf.has_audio && detailOf.audio_url ? (
-              <AudioRow uri={`${identity?.server ?? ''}${detailOf.audio_url}`} />
+            detailTask.has_audio && detailTask.audio_url ? (
+              <AudioRow uri={`${identity?.server ?? ''}${detailTask.audio_url}`} />
             ) : undefined
           }
         />

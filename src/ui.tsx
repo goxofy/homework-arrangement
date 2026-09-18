@@ -6,11 +6,13 @@
 // 状态栏区域还会把点击吃掉 —— 这就是「二级页面顶到最上面、完成按钮点不了」的原因。
 // Overlay 直接渲染在 App 自己的视图树里,安全区和键盘避让全部走主窗口的正确数值。
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   BackHandler,
   Dimensions,
+  Easing,
   Platform,
   Pressable,
   ScrollView,
@@ -155,39 +157,140 @@ export function Screen({
 }
 
 /**
+ * 整屏页面的进场动画(淡入 + 轻微上滑)。
+ * 换页时给每个页面加不同的 key,React 会重新挂载整个子树,动画就会重新播放。
+ */
+export function FadeIn({
+  children,
+  distance = 16,
+  duration = 240,
+  style,
+}: {
+  children: React.ReactNode;
+  distance?: number;
+  duration?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const v = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(v, {
+      toValue: 1,
+      duration,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [v, duration]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.fadeIn,
+        style,
+        {
+          opacity: v,
+          transform: [
+            { translateY: v.interpolate({ inputRange: [0, 1], outputRange: [distance, 0] }) },
+          ],
+        },
+      ]}>
+      {children}
+    </Animated.View>
+  );
+}
+
+const OVERLAY_IN_MS = 220;
+const OVERLAY_OUT_MS = 170;
+
+/**
  * 全屏弹层(替代 RN Modal)。直接渲染在 App 视图树里,好处:
  * - 安全区 insets 正确(状态栏/手势条/横屏左右都能让位)
  * - 键盘避让与主页面走同一套逻辑
  * - 可以嵌套(Modal 里再开 Modal 在 Android 上不可靠)
  * Android 返回键会自动关闭它。
+ *
+ * 动画:visible 变 true 时淡入 + 上滑,变 false 时先播退场动画再卸载。
+ * 所以父级要「常驻渲染 + 传 visible」,不要再写成 {open && <Xxx/>},
+ * 否则组件当场卸载,退场动画没机会播。
  */
 export function Overlay({
   children,
   onRequestClose,
   bar,
   zIndex = 20,
+  visible = true,
 }: {
   children: React.ReactNode;
   onRequestClose: () => void;
   bar?: React.ReactNode;
   /** 弹层叠放顺序(同级弹层里更靠上的一层用更大的值) */
   zIndex?: number;
+  /** 显隐开关(false 时播完退场动画后整层卸载,不会挡住点击) */
+  visible?: boolean;
 }) {
+  const anim = useRef(new Animated.Value(0)).current;
+  const [mounted, setMounted] = useState(visible);
+  const mountedRef = useRef(visible);
+  mountedRef.current = mounted;
+
   useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      anim.setValue(0);
+      const a = Animated.timing(anim, {
+        toValue: 1,
+        duration: OVERLAY_IN_MS,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      });
+      a.start();
+      return () => a.stop();
+    }
+    // 已经隐藏(或首次挂载就是隐藏)就不用播退场
+    if (!mountedRef.current) return;
+    const a = Animated.timing(anim, {
+      toValue: 0,
+      duration: OVERLAY_OUT_MS,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    });
+    a.start(({ finished }) => {
+      if (finished) setMounted(false);
+    });
+    return () => a.stop();
+  }, [visible, anim]);
+
+  // 返回键只在可见时接管
+  useEffect(() => {
+    if (!visible) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       onRequestClose();
       return true;
     });
     return () => sub.remove();
-  }, [onRequestClose]);
+  }, [onRequestClose, visible]);
+
+  // 完全收起后整层卸载:既省资源,也保证不会有「看不见却吃点击」的残留
+  if (!mounted) return null;
 
   return (
-    <View style={[styles.overlay, { zIndex, elevation: zIndex }]}>
+    <Animated.View
+      pointerEvents={visible ? 'auto' : 'none'}
+      style={[
+        styles.overlay,
+        { zIndex, elevation: zIndex },
+        {
+          opacity: anim,
+          transform: [
+            { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) },
+          ],
+        },
+      ]}>
       <SafeAreaView style={styles.overlaySafe} edges={[...SAFE_EDGES]}>
         {bar}
         {children}
       </SafeAreaView>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -196,13 +299,19 @@ export function TopBar({
   title,
   left,
   right,
+  flat,
 }: {
   title?: string;
   left?: React.ReactNode;
   right?: React.ReactNode;
+  /**
+   * 与首页一致的「扁平」样式:背景透明、去掉下边框。
+   * 弹层顶部若用白条,白条和下面的浅灰内容之间会出现一条割裂的色带,用 flat 让二者同色。
+   */
+  flat?: boolean;
 }) {
   return (
-    <View style={styles.topBar}>
+    <View style={[styles.topBar, flat && styles.topBarFlat]}>
       <View style={styles.topBarSide}>{left}</View>
       <Text style={styles.topBarTitle} numberOfLines={1}>
         {title ?? ''}
@@ -523,6 +632,7 @@ export function ErrorBar({ message, onRetry }: { message: string; onRetry?: () =
 }
 
 const styles = StyleSheet.create({
+  fadeIn: { flex: 1 },
   screen: { flex: 1 },
   screenScroll: { flex: 1, backgroundColor: colors.bg },
   // 内边距(含安全区)在 Screen 里按 edges 动态计算
@@ -550,6 +660,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  topBarFlat: { backgroundColor: 'transparent', borderBottomWidth: 0 },
   topBarSide: { minWidth: 72, justifyContent: 'center' },
   topBarSideRight: { alignItems: 'flex-end' },
   topBarTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: colors.text },

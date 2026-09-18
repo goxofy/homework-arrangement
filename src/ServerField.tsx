@@ -64,8 +64,6 @@ export function ServerPrompt({
     }
   }, [visible, value]);
 
-  if (!visible) return null;
-
   const save = () => {
     const raw = draft.trim();
     if (!raw) {
@@ -83,9 +81,11 @@ export function ServerPrompt({
     <Overlay
       // 设置页里可能已经在另一个弹层上面,所以这层要更靠上
       zIndex={30}
+      visible={visible}
       onRequestClose={onCancel}
       bar={
         <TopBar
+          flat
           title={title}
           left={<TopBarAction title="取消" tone="sub" onPress={onCancel} />}
           right={<TopBarAction title="保存" onPress={save} />}

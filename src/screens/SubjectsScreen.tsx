@@ -7,7 +7,13 @@ import { colors, spacing, subjectPalette } from '../theme';
 import { useApp } from '../AppContext';
 import type { Subject } from '../storage';
 
-export default function SubjectsScreen({ onClose }: { onClose: () => void }) {
+export default function SubjectsScreen({
+  visible = true,
+  onClose,
+}: {
+  visible?: boolean;
+  onClose: () => void;
+}) {
   const { subjects, addSubject, editSubject, archiveSubject } = useApp();
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -54,9 +60,10 @@ export default function SubjectsScreen({ onClose }: { onClose: () => void }) {
 
   return (
     <Overlay
+      visible={visible}
       onRequestClose={onClose}
       bar={
-        <TopBar title="作业分组" left={<TopBarAction title="完成" onPress={onClose} />} />
+        <TopBar flat title="作业分组" left={<TopBarAction title="完成" onPress={onClose} />} />
       }>
       <Screen>
           <Text style={s.hint}>

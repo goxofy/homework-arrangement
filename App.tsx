@@ -6,6 +6,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { AppProvider, useApp } from './src/AppContext';
 import { DisplayProvider } from './src/display';
+import { FadeIn } from './src/ui';
 import { colors, spacing } from './src/theme';
 import { loadServerHint, saveServerHint, type Role } from './src/storage';
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -50,47 +51,58 @@ function Root() {
     );
   }
 
+  // 换页统一走 FadeIn(每次换页 key 不同 → 重新挂载 → 重新播进场动画)
+
   // 1. 未选身份 → 欢迎页(含服务器地址填写)
   if (!identity && !pickedRole) {
-    return <WelcomeScreen onPick={setPickedRole} server={serverHint} onChangeServer={changeServerHint} />;
+    return (
+      <FadeIn key="welcome">
+        <WelcomeScreen onPick={setPickedRole} server={serverHint} onChangeServer={changeServerHint} />
+      </FadeIn>
+    );
   }
 
   // 2. 已选身份但未加入房间 → 加入房间(预填欢迎页填的地址)
   if (!identity && pickedRole) {
     return (
-      <JoinRoomScreen
-        role={pickedRole}
-        initialServer={serverHint}
-        onJoined={(server, roomCode) => {
-          changeServerHint(server);
-          saveIdentityAndJoin({ role: pickedRole, roomCode, server }).catch(() => {});
-        }}
-        onBack={() => setPickedRole(null)}
-      />
+      <FadeIn key={`join-${pickedRole}`}>
+        <JoinRoomScreen
+          role={pickedRole}
+          initialServer={serverHint}
+          onJoined={(server, roomCode) => {
+            changeServerHint(server);
+            saveIdentityAndJoin({ role: pickedRole, roomCode, server }).catch(() => {});
+          }}
+          onBack={() => setPickedRole(null)}
+        />
+      </FadeIn>
     );
   }
 
   // 3. 儿童端
   if (identity!.role === 'child') {
-    return <ChildHomeScreen />;
+    return (
+      <FadeIn key="child">
+        <ChildHomeScreen />
+      </FadeIn>
+    );
   }
 
-  // 4. 家长端
+  // 4. 家长端(弹层常驻渲染 + visible:关闭时才能播退场动画)
   return (
-    <>
+    <FadeIn key="parent">
       <ParentHomeScreen
         onOpenSubjects={() => setSubjectsOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
-      {subjectsOpen && <SubjectsScreen onClose={() => setSubjectsOpen(false)} />}
-      {settingsOpen && (
-        <SettingsScreen
-          onClose={() => setSettingsOpen(false)}
-          onUpdateServer={updateIdentity}
-          onSignOut={signOut}
-        />
-      )}
-    </>
+      <SubjectsScreen visible={subjectsOpen} onClose={() => setSubjectsOpen(false)} />
+      <SettingsScreen
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onUpdateServer={updateIdentity}
+        onSignOut={signOut}
+      />
+    </FadeIn>
   );
 }
 
