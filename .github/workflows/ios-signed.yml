@@ -1,7 +1,7 @@
 name: iOS signed IPA (TestFlight)
 
 # 只在「手动触发」和「打 tag」时运行,不会因为日常 push 触发:
-# 它需要把朋友的 Apple Distribution 证书和 App Store 描述文件作为 secrets 注入。
+# 它需要把朋友的分发证书(Apple Distribution / iOS Distribution 都可以)和 App Store 描述文件作为 secrets 注入。
 on:
   workflow_dispatch:
   push:
@@ -85,6 +85,25 @@ jobs:
           echo "已导入的签名身份:"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
+          # 证书名可能是 "Apple Distribution: X",也可能是老式的 "iPhone Distribution: X"
+          # (Apple 2020 年才把两者统一成 Apple Distribution)。硬编码其中一种,另一种签名必失败,
+          # 所以从导入的证书里读出真实身份名,后面传给 xcodebuild。
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | sed -n 's/^ *[0-9]*) [0-9A-Fa-f]\{40\} "\(.*\)"$/\1/p' | head -n 1)
+          if [ -z "$SIGNING_IDENTITY" ]; then
+            echo "::error::p12 里没有可用的签名身份(多半是导出时没带私钥)—— 在钥匙串访问里展开证书、确认下面挂着私钥后重新导出"
+            exit 1
+          fi
+          case "$SIGNING_IDENTITY" in
+            *Distribution*) ;;
+            *)
+              echo "::error::导入的是 \"$SIGNING_IDENTITY\",不是分发证书(Apple Distribution / iPhone Distribution),不能用于 TestFlight"
+              exit 1
+              ;;
+          esac
+          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo "签名身份: $SIGNING_IDENTITY"
+
       - name: Install provisioning profile
         run: |
           echo "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
@@ -160,7 +179,7 @@ jobs:
             archive \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
 

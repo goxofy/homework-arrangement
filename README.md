@@ -133,7 +133,7 @@ TestFlight 只收**已签名**的 ipa;而且 App Store Connect 现在要求用 X
 朋友在 [developer.apple.com/account](https://developer.apple.com/account) → Certificates, Identifiers & Profiles:
 
 1. **Identifiers → ＋ → App IDs → App**,Bundle ID 选 *Explicit*,填 `com.goxofy.homework`
-2. **Certificates → ＋ → Apple Distribution**
+2. **Certificates → ＋ → Apple Distribution**(或 **iOS Distribution** —— 二者都能用于 App Store / TestFlight:前者是 2020 年后 Apple 的统一分发证书,后者只覆盖 iOS/iPadOS 但同样有效。工作流会自动识别证书实际名称,不用为了它重新签发)
    - 需要 CSR:在他 Mac 上「钥匙串访问 → 证书助理 → 从证书颁发机构请求证书」,存到磁盘后上传
    - 生成后下载 `.cer`,双击装进钥匙串 → 钥匙串里右键这张证书 → **导出** → 存成 `.p12`(设个密码)
    - 个人账号最多 3 张分发证书,若已满会要求先吊销一张
@@ -143,15 +143,29 @@ TestFlight 只收**已签名**的 ipa;而且 App Store Connect 现在要求用 X
 > 这是分发凭证,别提交进 git。请他一年内不要吊销这张证书(过期或被吊销后要重新给一份)。
 > 另外:个人账号邀请的成员拿不到证书/描述文件入口,所以上面几步只能他做;你在 App Store Connect 里建 App 记录、传 build、管 TestFlight 都没问题。
 
-### 配置 GitHub Secrets
+### 校验凭据 + 配置 GitHub Secrets
 
-仓库 → Settings → Secrets and variables → Actions → New repository secret:
+拿到三个文件后,先在本地验一遍(**强烈建议** —— 否则要等 10 分钟 CI 才知道证书有问题):
 
-| Name | 值 |
-|------|-----|
-| `IOS_DIST_P12_BASE64` | `base64 -i ~/Desktop/distribution.p12 \| pbcopy` 的结果 |
-| `IOS_DIST_P12_PASSWORD` | 导出 p12 时设的密码(明文) |
-| `IOS_PROFILE_BASE64` | `base64 -i ~/Desktop/app.mobileprovision \| pbcopy` 的结果 |
+```bash
+cd homework-app
+bash scripts/ios-credentials.sh ~/Desktop/distribution.p12 ~/Desktop/app.mobileprovision
+# 会提示输入 p12 密码(不回显)
+```
+
+它会检查:描述文件是不是 **App Store 分发**类型(不是 Ad Hoc/Development)、有没有过期、Bundle ID 是否和 `app.json` 一致、p12 **是否含私钥**、证书和描述文件**是否配对**、证书是否过期、证书是不是「分发」证书(开发证书会被拒)。任一不过就带着原因停下来,每条都对应 CI 里会踩的坑。
+
+> 证书主体名是 `Apple Distribution: X` 还是 `iPhone Distribution: X` 都行,两者都是合法的 App Store 分发证书;CI 会读证书的实际名称再签名。
+
+全绿后,三条 secret 一条命令推上去(需要已登录的 `gh CLI`;不加 `--set` 则只打印出网页上要填的值):
+
+```bash
+bash scripts/ios-credentials.sh ~/Desktop/distribution.p12 ~/Desktop/app.mobileprovision --set
+```
+
+> 手工填的话是这三条(仓库 → Settings → Secrets and variables → Actions):`IOS_DIST_P12_BASE64`、`IOS_DIST_P12_PASSWORD`(明文密码)、`IOS_PROFILE_BASE64`。
+>
+> 校验脚本本身也有自测(用合成的假证书跑全部校验分支,不需要真实凭据):`bash scripts/ios-credentials.selftest.sh`。换了证书或改了脚本后可以复跑。
 
 ### 出包 + 上传
 
