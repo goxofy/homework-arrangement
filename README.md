@@ -175,10 +175,32 @@ bash scripts/ios-credentials.sh ~/Desktop/distribution.p12 ~/Desktop/app.mobilep
 4. 等 5–15 分钟:App Store Connect → TestFlight → 内部测试 → 建个测试组,把自己加进去
 5. iPhone/iPad 装 **TestFlight** App → 接受邀请 → 安装
 
+#### build 号怎么定的
+
+App Store Connect 里**同一个版本号下的 build 号必须唯一**(重复会被 Transporter 拒:ITMS-4238)。工作流的规则是:
+
+```
+build 号 = 手动填的 build_number  ??  (CI run number + 仓库变量 IOS_BUILD_OFFSET)
+```
+
+- **手动填**:Run workflow 时在 `build_number` 里写数字(如 `7`),优先级最高、覆盖一切。适合「我想发某号」或临时救场。
+- **默认自动**:`github.run_number` 是这个工作流的第几次运行(从 1 开始),**不等于** App Store Connect 里已有的 build 数。所以仓库变量 `IOS_BUILD_OFFSET` 就是用来错开历史 build 的:
+
+  ```bash
+  gh variable set IOS_BUILD_OFFSET --body 1 --repo goxofy/homework-arrangement
+  gh variable list --repo goxofy/homework-arrangement
+  ```
+
+  取值规则:**只要保证 `run_number + offset ≥ 已发布的最大 build 号 + 1`** 就不会撞。本项目首发时 App Store Connect 里已有 `1.0.0(1)`、`1.0.0(2)`,工作流又是第一次跑(run number = 1),所以 offset 设成 `1` → 这一次得到 `1.0.0(3)`,之后 run 3 → 4、run 4 → 5,永久单调递增。
+
+  > 换新的小版本号(如 `1.1.0`)时 offset 可以保持不变——build 号只需在**同一版本号内**唯一,递增着用总是安全的。
+- **版本号**(`1.0.0` 这种)走 `app.json` 的 `expo.version`,需要新版本时自己改再提交。
+- 构建完成后的 run 页面 **Summary** 里会写明这次用的是 `版本 (build 号)` 以及它的来源(自动还是手动)。
+
 ### 三个必须知道的点
 
 - **上传前必须已有 App 记录**:App Store Connect → Apps → ＋ → New App,名称随意(如「今日作业」),Bundle ID 选 `com.goxofy.homework`。Admin 通常能自己建;若「＋」是灰的(个人账号对建 App 记录有限制),让朋友建一次。
-- **build 号自动递增**:工作流每次把 GitHub run number 写进 `ios.buildNumber`,不用手动改(改的是 CI 里的临时文件,不进 git)。
+- **build 号自动递增**:工作流每次把算出来的号写进 `ios.buildNumber`(改的是 CI 工作区里的临时文件,不进 git,也不会污染你的仓库)。算法见上面「build 号怎么定的」。
 - **内部测试不需审核**(也不涉及备案),但 **build 有效期 90 天**,过期重新跑工作流 + 重新上传即可;TestFlight 内部测试员上限 100 人。
 
 ## 界面与适配说明(踩过的坑)

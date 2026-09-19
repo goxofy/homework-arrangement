@@ -4,6 +4,11 @@ name: iOS signed IPA (TestFlight)
 # 它需要把朋友的分发证书(Apple Distribution / iOS Distribution 都可以)和 App Store 描述文件作为 secrets 注入。
 on:
   workflow_dispatch:
+    inputs:
+      build_number:
+        description: 'iOS build number(留空 = CI run number + 仓库变量 IOS_BUILD_OFFSET)'
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
@@ -44,19 +49,61 @@ jobs:
           npm i -g bun
           bun install --frozen-lockfile
 
-      # TestFlight 每次上传都要求 build 号递增,这里直接用 CI 的 run number,免去手工改 app.json
-      - name: Bump iOS build number
+      # TestFlight 每次上传都要求 build 号递增。
+      # 默认取 CI run number + 仓库变量 IOS_BUILD_OFFSET:run number 从 1 开始,而 App Store
+      # Connect 里可能已经有历史 build(比如 1.0.0(1)/1.0.0(2)),靠 offset 一次性错开就不会撞。
+      # 也可以在手动触发时填 build_number 直接指定(优先级最高)。
+      - name: Set iOS build number
+        env:
+          REQUESTED_BUILD_NUMBER: ${{ inputs.build_number }}
+          IOS_BUILD_OFFSET: ${{ vars.IOS_BUILD_OFFSET }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          node -e '
+          OFFSET=$(printf '%s' "${IOS_BUILD_OFFSET:-0}" | tr -d '[:space:]')
+          case "$OFFSET" in
+            ''|*[!0-9]*)
+              echo "::error::仓库变量 IOS_BUILD_OFFSET 必须是非负整数,当前是 \"$OFFSET\""
+              exit 1
+              ;;
+          esac
+
+          REQUESTED=$(printf '%s' "${REQUESTED_BUILD_NUMBER:-}" | tr -d '[:space:]')
+          if [ -n "$REQUESTED" ]; then
+            BUILD_NUMBER="$REQUESTED"
+            SOURCE="手动指定"
+          else
+            BUILD_NUMBER=$(( RUN_NUMBER + OFFSET ))
+            SOURCE="run number $RUN_NUMBER + offset $OFFSET"
+          fi
+
+          case "$BUILD_NUMBER" in
+            ''|*[!0-9]*)
+              echo "::error::build number 必须是非负整数,得到 \"$BUILD_NUMBER\""
+              exit 1
+              ;;
+          esac
+          if [ "$BUILD_NUMBER" -lt 1 ]; then
+            echo "::error::build number 必须 ≥ 1,得到 $BUILD_NUMBER"
+            exit 1
+          fi
+
+          BUILD_NUMBER="$BUILD_NUMBER" node -e '
             const fs = require("fs");
             const cfg = JSON.parse(fs.readFileSync("app.json", "utf8"));
             cfg.expo.ios = cfg.expo.ios || {};
-            cfg.expo.ios.buildNumber = process.env.BUILD_NUMBER || "1";
+            cfg.expo.ios.buildNumber = process.env.BUILD_NUMBER;
             fs.writeFileSync("app.json", JSON.stringify(cfg, null, 2) + "\n");
           '
-          echo "buildNumber = $(node -p "require('./app.json').expo.ios.buildNumber")"
-        env:
-          BUILD_NUMBER: ${{ github.run_number }}
+
+          VERSION=$(node -p "require('./app.json').expo.version")
+          echo "buildNumber = $BUILD_NUMBER(版本 $VERSION,来源: $SOURCE)"
+          {
+            echo "### iOS 构建信息"
+            echo ""
+            echo "- 版本: \`$VERSION\`"
+            echo "- Build: \`$BUILD_NUMBER\`（来源: $SOURCE）"
+            echo "- 上传后 App Store Connect 里显示为 \`$VERSION ($BUILD_NUMBER)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate native iOS project (prebuild)
         run: npx expo prebuild --platform ios --no-install
