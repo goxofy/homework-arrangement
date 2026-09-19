@@ -144,8 +144,6 @@ jobs:
             <string>export</string>
             <key>stripSwiftSymbols</key>
             <true/>
-            <key>compileBitcode</key>
-            <false/>
             <key>uploadSymbols</key>
             <true/>
           </dict>
