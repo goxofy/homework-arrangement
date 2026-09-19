@@ -96,13 +96,13 @@ jobs:
           '
 
           VERSION=$(node -p "require('./app.json').expo.version")
-          echo "buildNumber = $BUILD_NUMBER(版本 $VERSION,来源: $SOURCE)"
+          echo "buildNumber = ${BUILD_NUMBER}(版本 ${VERSION},来源: ${SOURCE})"
           {
             echo "### iOS 构建信息"
             echo ""
-            echo "- 版本: \`$VERSION\`"
-            echo "- Build: \`$BUILD_NUMBER\`（来源: $SOURCE）"
-            echo "- 上传后 App Store Connect 里显示为 \`$VERSION ($BUILD_NUMBER)\`"
+            echo "- 版本: \`${VERSION}\`"
+            echo "- Build: \`${BUILD_NUMBER}\`（来源: ${SOURCE}）"
+            echo "- 上传后 App Store Connect 里显示为 \`${VERSION} (${BUILD_NUMBER})\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate native iOS project (prebuild)
