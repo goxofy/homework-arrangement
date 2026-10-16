@@ -12,9 +12,9 @@
       "bundleIdentifier": "com.goxofy.homework",
       "buildNumber": "1",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "用于录制语音作业并自动转为文字,方便家长布置作业。",
+        "NSMicrophoneUsageDescription": "用于录制语音作业(自动转为文字,或作为语音讲解附件),方便家长布置作业。",
         "NSSpeechRecognitionUsageDescription": "用于把您说的话转成作业文字。",
-        "NSPhotoLibraryUsageDescription": "本应用不使用相册功能。此声明由内置的文件系统模块要求(用于读取应用自身文件),应用不会访问、收集或上传您的任何照片。",
+        "NSPhotoLibraryUsageDescription": "用于选择您自己的作业照片、音视频作为作业附件。附件只上传到您自建的服务器,应用不会访问、收集或上传到其他任何地方。",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -40,6 +40,14 @@
       "./plugins/withAndroidBuildTuning",
       "expo-speech-recognition",
       "expo-audio",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "用于选择您自己的作业照片、音视频作为作业附件。附件只上传到您自建的服务器。",
+          "cameraPermission": false
+        }
+      ],
+      "expo-video",
       [
         "expo-build-properties",
         {

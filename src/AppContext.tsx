@@ -11,7 +11,7 @@ import React, {
 } from 'react';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { api } from './api';
+import { api, type UploadFile } from './api';
 import {
   loadIdentity,
   saveIdentity,
@@ -21,8 +21,16 @@ import {
   type Role,
   type Subject,
   type Task,
+  type TaskMedia,
 } from './storage';
+import { importLocalFile, removeCachedMedia } from './media';
 import { addDays, todayStr } from './dates';
+
+/** 上传失败的一个附件 */
+export interface UploadFailure {
+  name: string;
+  reason: string;
+}
 
 const WS_BACKOFF_MAX = 15000;
 
@@ -39,7 +47,31 @@ interface AppContextValue {
   signOut: () => Promise<void>;
   refreshSubjects: () => Promise<void>;
   refreshTasks: (date: string) => Promise<void>;
-  addTask: (input: { date: string; subject_id: string; content: string; audio_base64?: string; audio_mime?: string }) => Promise<void>;
+  /**
+   * 新建作业。files 是已经选好的本机文件(图片/语音/视频/文件),会依次上传;
+   * 作业本身创建成功后即使某个附件上传失败也不会丢,失败项通过返回值告知。
+   */
+  addTask: (
+    input: {
+      date: string;
+      subject_id: string;
+      content: string;
+      audio_base64?: string;
+      audio_mime?: string;
+      files?: UploadFile[];
+    },
+    /** index 是「正在上传第几个」(0 起),全部结束时用 (total, total, '') 再回调一次 */
+    onUploadProgress?: (index: number, total: number, currentName: string) => void
+  ) => Promise<{ id: string | null; failed: UploadFailure[] }>;
+  /** 给已有作业补附件(家长端) */
+  uploadTaskMedia: (
+    tid: string,
+    date: string,
+    files: UploadFile[],
+    onUploadProgress?: (index: number, total: number, currentName: string) => void
+  ) => Promise<UploadFailure[]>;
+  /** 删除某个附件(服务器文件 + 本机缓存) */
+  removeTaskMedia: (media: TaskMedia, date: string) => Promise<void>;
   editTask: (tid: string, patch: { content?: string; subject_id?: string }, date: string) => Promise<void>;
   /** 勾选/取消勾选「已完成」(家长与儿童都可操作,乐观更新,失败回滚) */
   setTaskDone: (tid: string, done: boolean, date: string) => Promise<void>;
@@ -201,6 +233,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity]);
 
+  /**
+   * 依次上传若干附件(并发会让弱服务器 + 手机网络更容易失败,所以串行)。
+   * 单个失败不影响其他附件,最后把失败清单返回给界面提示。
+   */
+  const uploadFiles = useCallback(
+    async (
+      id: Identity,
+      taskId: string,
+      files: UploadFile[],
+      onProgress?: (index: number, total: number, currentName: string) => void
+    ): Promise<UploadFailure[]> => {
+      const failed: UploadFailure[] = [];
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        onProgress?.(index, files.length, file.name);
+        try {
+          const res = await api.uploadTaskMedia(id.server, id.roomCode, taskId, file);
+          // 刚上传的文件直接收进本机缓存,家长端不用再下载一遍自己的附件
+          await importLocalFile(file.uri, {
+            id: res.id,
+            kind: res.kind,
+            name: file.name,
+            mime: file.mime,
+            size: 0,
+            created_at: Date.now(),
+            expires_at: res.expires_at,
+            expired: false,
+            url: '',
+          });
+        } catch (e) {
+          failed.push({ name: file.name, reason: e instanceof Error ? e.message : '上传失败' });
+        }
+      }
+      if (files.length > 0) onProgress?.(files.length, files.length, '');
+      return failed;
+    },
+    []
+  );
+
   const saveIdentityAndJoin = useCallback(async (id: Identity) => {
     await saveIdentity(id);
     setIdentity(id);
@@ -250,10 +321,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       signOut,
       refreshSubjects: () => (identity ? fetchSubjects(identity) : Promise.resolve()),
       refreshTasks: (date) => (identity ? fetchTasks(identity, date) : Promise.resolve()),
-      addTask: async (input) => {
-        if (!identity) return;
-        await api.createTask(identity.server, identity.roomCode, input);
+      addTask: async (input, onUploadProgress) => {
+        if (!identity) return { id: null, failed: [] };
+        const created = await api.createTask(identity.server, identity.roomCode, {
+          date: input.date,
+          subject_id: input.subject_id,
+          content: input.content,
+          audio_base64: input.audio_base64,
+          audio_mime: input.audio_mime,
+        });
+        const failed = await uploadFiles(identity, created.id, input.files ?? [], onUploadProgress);
+        // 重新拉一次:把附件(含失败前已上传的部分)一起带回来
         await fetchTasks(identity, input.date);
+        return { id: created.id, failed };
+      },
+      uploadTaskMedia: async (tid, date, files, onUploadProgress) => {
+        if (!identity) return [];
+        const failed = await uploadFiles(identity, tid, files, onUploadProgress);
+        await fetchTasks(identity, date);
+        return failed;
+      },
+      removeTaskMedia: async (media, date) => {
+        if (!identity) return;
+        await api.deleteTaskMedia(identity.server, identity.roomCode, media.id);
+        removeCachedMedia(media);
+        await fetchTasks(identity, date);
       },
       editTask: async (tid, patch, date) => {
         if (!identity) return;
@@ -307,6 +399,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       signOut,
       fetchSubjects,
       fetchTasks,
+      uploadFiles,
     ]
   );
 

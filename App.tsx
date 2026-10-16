@@ -6,6 +6,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { AppProvider, useApp } from './src/AppContext';
 import { DisplayProvider } from './src/display';
+import { MediaViewerProvider } from './src/media-viewer';
 import { FadeIn } from './src/ui';
 import { colors, spacing } from './src/theme';
 import { loadServerHint, saveServerHint, type Role } from './src/storage';
@@ -112,8 +113,11 @@ export default function App() {
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <DisplayProvider>
         <AppProvider>
-          <StatusBar style="dark" />
-          <Root />
+          {/* 全屏图片/视频查看器:挂在根节点,谁都能调(不跟随页面滚动) */}
+          <MediaViewerProvider>
+            <StatusBar style="dark" />
+            <Root />
+          </MediaViewerProvider>
         </AppProvider>
       </DisplayProvider>
     </SafeAreaProvider>

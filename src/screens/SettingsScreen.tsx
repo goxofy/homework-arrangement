@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, Overlay, Screen, SectionTitle, Segmented, TopBar, TopBarAction } from '../ui';
 import { colors, spacing, roleLabel } from '../theme';
+import { clearMediaCache, humanSize, mediaCacheSize } from '../media';
 import { DENSITY_OPTIONS, FONT_OPTIONS, useDisplay } from '../display';
 import { useApp } from '../AppContext';
 import type { Identity } from '../storage';
@@ -27,6 +28,32 @@ export default function SettingsScreen({
   const [serverOpen, setServerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  /** 已下载附件的本机占用(每次打开设置页算一次) */
+  const [cacheBytes, setCacheBytes] = useState<number | null>(null);
+  React.useEffect(() => {
+    if (!visible) return;
+    setCacheBytes(mediaCacheSize());
+  }, [visible]);
+
+  const clearCache = () => {
+    Alert.alert(
+      '清理本机资料',
+      '将删除本机已下载的作业附件(图片/语音/视频)。服务器上的附件不受影响,联网后会重新下载;超过 7 天服务器已删除的将无法再获取。',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '清理',
+          style: 'destructive',
+          onPress: () => {
+            const n = clearMediaCache();
+            setCacheBytes(mediaCacheSize());
+            Alert.alert('已清理', n > 0 ? `删除了 ${n} 个已下载的附件。` : '本机没有已下载的附件。');
+          },
+        },
+      ]
+    );
+  };
 
   const saveServer = async (server: string) => {
     setServerOpen(false);
@@ -115,6 +142,18 @@ export default function SettingsScreen({
                 <Text style={[s.hint, { fontSize: fs(12) }]}>
                   影响作业列表的字号与行距(只影响本机显示)。作业内容过长时单行会省略,点任务文字即可查看全文。
                 </Text>
+              </Card>
+
+              <SectionTitle>作业资料缓存</SectionTitle>
+              <Card style={{ gap: spacing(1) }}>
+                <Text style={[s.rowLabel, { fontSize: fs(14) }]}>
+                  本机已下载资料:{humanSize(cacheBytes) || '0 KB'}
+                </Text>
+                <Text style={[s.hint, { fontSize: fs(12) }]}>
+                  孩子翻到某一天的作业时,这一天的图片/语音/视频会自动下载到本机并长期保留
+                  (服务器只暂存 7 天)。真的缺空间时再清理这里。
+                </Text>
+                <Button title="清理本机已下载资料" variant="ghost" onPress={clearCache} />
               </Card>
 
               <SectionTitle>身份与房间</SectionTitle>

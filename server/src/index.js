@@ -10,6 +10,7 @@ import {
   db,
   DATA_DIR,
   AUDIO_DIR,
+  MEDIA_DIR,
   id,
   now,
   createRoom,
@@ -20,6 +21,11 @@ import {
   listTasks,
   getTask,
   deleteTask,
+  createMedia,
+  getMedia,
+  listMediaByTask,
+  deleteMedia,
+  expireMedia,
 } from './db.js';
 import { attachWs, broadcast } from './ws.js';
 import {
@@ -29,6 +35,14 @@ import {
   SUBJECT_NAME_MAX,
   AUDIO_MAX_BYTES,
   AUDIO_MIME_EXT,
+  MEDIA_MAX_BYTES,
+  MEDIA_MAX_PER_TASK,
+  MEDIA_TTL_DAYS,
+  MEDIA_TTL_LABEL,
+  MEDIA_UPLOAD_LIMIT,
+  mediaKind,
+  mediaExt,
+  safeFileName,
   badRequest,
   notFound,
 } from './util.js';
@@ -37,7 +51,19 @@ const PORT = Number(process.env.PORT || 8787);
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '25mb' })); // 语音 base64 上传
+
+/**
+ * JSON 请求体解析(语音 base64 走这里)。
+ *
+ * 例外:附件上传是「原始字节流」,body 就是文件本身。这里必须跳过,
+ * 否则上传一个 .json 文件时会被当成 JSON 解析掉(handler 就拿不到 Buffer 了)。
+ */
+const MEDIA_UPLOAD_PATH_RE = /^\/api\/rooms\/[^/]+\/tasks\/[^/]+\/media$/;
+const jsonBody = express.json({ limit: '25mb' });
+app.use((req, res, next) => {
+  if (req.method === 'POST' && MEDIA_UPLOAD_PATH_RE.test(req.path)) return next();
+  return jsonBody(req, res, next);
+});
 
 const server = http.createServer(app);
 attachWs(server);
@@ -227,6 +253,88 @@ app.delete('/api/rooms/:code/tasks/:tid', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- 附件(图片 / 音视频 / 文件) ----------
+// 家长端上传,服务器暂存 MEDIA_TTL_DAYS 天(默认 7 天)后自动删除;
+// 儿童端在这期间打开对应日期会把附件下载到本机长期保存。
+//
+// 上传的请求体就是文件字节流(Content-Type = 文件 mime),元数据走 query:
+// 避免 base64 多出 33% 的体积,几十 MB 的视频也能正常上传。
+app.post(
+  '/api/rooms/:code/tasks/:tid/media',
+  express.raw({ type: () => true, limit: MEDIA_UPLOAD_LIMIT }),
+  (req, res) => {
+    const code = withRoom(req, res);
+    if (!code) return;
+    if (!roomExists(code)) return notFound(res, '房间不存在');
+    const task = getTask(code, req.params.tid);
+    if (!task) return notFound(res, '任务不存在');
+
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (buf.length === 0) return badRequest(res, '附件内容为空');
+
+    const mime = String(req.query.mime || '').trim().toLowerCase() || 'application/octet-stream';
+    const kind = mediaKind(mime) || 'file';
+    const max = MEDIA_MAX_BYTES[kind] ?? MEDIA_MAX_BYTES.file;
+    if (buf.length > max) {
+      return badRequest(res, `附件过大(上限 ${Math.round(max / 1024 / 1024)}MB)`);
+    }
+    if (listMediaByTask(code, task.id).length >= MEDIA_MAX_PER_TASK) {
+      return badRequest(res, `每条作业最多 ${MEDIA_MAX_PER_TASK} 个附件`);
+    }
+
+    const name = safeFileName(req.query.name) || `${kind}${mediaExt(mime, '')}`;
+    const created = createMedia(code, task.id, {
+      kind,
+      name,
+      mime,
+      size: buf.length,
+      ext: mediaExt(mime, name),
+    });
+    fs.writeFileSync(path.join(DATA_DIR, created.media_path), buf);
+    // 先入库再广播:儿童端收到通知时已经能拉到这份附件
+    broadcast(code, { type: 'tasks_changed', date: task.for_date });
+    res.json({
+      ok: true,
+      id: created.id,
+      kind,
+      name,
+      mime,
+      size: buf.length,
+      expires_at: created.expires_at,
+    });
+  }
+);
+
+// 附件下载(儿童端/家长端都会下载到本机缓存)
+app.get('/api/rooms/:code/media/:mid', (req, res) => {
+  const code = withRoom(req, res);
+  if (!code) return;
+  // 顺手扫一下到期附件:不用等 10 分钟一次的定时任务,请求当下就能给「已过期」
+  expireMedia(50);
+  const media = getMedia(code, req.params.mid);
+  if (!media) return notFound(res, '附件不存在');
+  if (media.deleted_at) {
+    return res.status(410).json({ error: `附件已过期(服务器只暂存 ${MEDIA_TTL_LABEL})` });
+  }
+  const abs = path.join(DATA_DIR, media.media_path);
+  if (!fs.existsSync(abs)) return notFound(res, '附件文件缺失');
+  res.type(media.mime || 'application/octet-stream');
+  // sendFile 自带 Range 支持,大视频可以边下边播
+  res.sendFile(abs, { maxAge: 24 * 60 * 60 * 1000, headers: { 'Content-Type': media.mime || 'application/octet-stream' } });
+});
+
+// 家长端删除某个附件(儿童端已下载到本机的副本不受影响)
+app.delete('/api/rooms/:code/media/:mid', (req, res) => {
+  const code = withRoom(req, res);
+  if (!code) return;
+  const media = getMedia(code, req.params.mid);
+  if (!media) return notFound(res, '附件不存在');
+  const task = getTask(code, media.task_id);
+  deleteMedia(code, media.id);
+  if (task) broadcast(code, { type: 'tasks_changed', date: task.for_date });
+  res.json({ ok: true });
+});
+
 // ---------- 语音下载 ----------
 app.get('/api/rooms/:code/audio/:tid', (req, res) => {
   const code = withRoom(req, res);
@@ -239,23 +347,75 @@ app.get('/api/rooms/:code/audio/:tid', (req, res) => {
   fs.createReadStream(abs).pipe(res);
 });
 
+// ---------- 过期附件清理 ----------
+// 启动时扫一遍,之后每 10 分钟扫一遍。
+// 到期只删文件并打上 deleted_at 标记(行保留),这样客户端能显示「已过期」而不是干脆消失。
+function sweepExpiredMedia() {
+  try {
+    let total = 0;
+    for (let i = 0; i < 10; i++) {
+      const rows = expireMedia(500);
+      total += rows.length;
+      if (rows.length < 500) break;
+    }
+    if (total > 0) {
+      console.log(`[homework-server] 已清理 ${total} 个过期附件(附件只保留 ${MEDIA_TTL_LABEL})`);
+    }
+  } catch (e) {
+    console.error('[homework-server] 附件清理失败:', e?.message || e);
+  }
+}
+
+sweepExpiredMedia();
+const sweepTimer = setInterval(sweepExpiredMedia, 10 * 60 * 1000);
+sweepTimer.unref?.();
+
 // ---------- 启动 ----------
 server.listen(PORT, () => {
   console.log(`[homework-server] listening on :${PORT}`);
   console.log(`[homework-server] data dir: ${DATA_DIR}`);
+  console.log(`[homework-server] 附件暂存 ${MEDIA_TTL_LABEL},目录: ${MEDIA_DIR}`);
 });
 
-// 音频缓存目录大小统计(运维小工具):GET /api/stats
+function dirBytes(dir) {
+  let total = 0;
+  if (!fs.existsSync(dir)) return 0;
+  for (const f of fs.readdirSync(dir)) {
+    try {
+      total += fs.statSync(path.join(dir, f)).size;
+    } catch {}
+  }
+  return total;
+}
+
+// 缓存目录大小统计(运维小工具):GET /api/stats
 app.get('/api/stats', (_req, res) => {
   const rooms = db.prepare('SELECT COUNT(*) AS n FROM rooms').get().n;
   const tasks = db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n;
-  let audioBytes = 0;
-  if (fs.existsSync(AUDIO_DIR)) {
-    for (const f of fs.readdirSync(AUDIO_DIR)) {
-      try {
-        audioBytes += fs.statSync(path.join(AUDIO_DIR, f)).size;
-      } catch {}
-    }
+  const media = db
+    .prepare('SELECT COUNT(*) AS n FROM task_media WHERE deleted_at IS NULL')
+    .get().n;
+  const expiredMedia = db
+    .prepare('SELECT COUNT(*) AS n FROM task_media WHERE deleted_at IS NOT NULL')
+    .get().n;
+  res.json({
+    rooms,
+    tasks,
+    audio_bytes: dirBytes(AUDIO_DIR),
+    media,
+    expired_media: expiredMedia,
+    media_bytes: dirBytes(MEDIA_DIR),
+    media_ttl_days: MEDIA_TTL_DAYS,
+    media_ttl_label: MEDIA_TTL_LABEL,
+  });
+});
+
+// ---------- 统一错误响应 ----------
+// 上传超限等中间件错误默认返回 HTML,客户端解析不了;这里统一成 JSON。
+app.use((err, _req, res, _next) => {
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ error: '上传内容过大,请压缩或截短后重试' });
   }
-  res.json({ rooms, tasks, audio_bytes: audioBytes });
+  console.error('[homework-server] 未处理的错误:', err?.message || err);
+  res.status(500).json({ error: '服务器内部错误' });
 });

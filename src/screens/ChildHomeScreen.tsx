@@ -3,13 +3,14 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { Card, CONTENT_MAX_WIDTH, DoneCircle, Empty, GroupHeader, Screen, WeekNav } from '../ui';
+import { Card, CONTENT_MAX_WIDTH, DoneCircle, Empty, GroupHeader, Screen, SyncToast, WeekNav } from '../ui';
 import { colors, spacing } from '../theme';
 import { useDisplay } from '../display';
 import { useApp } from '../AppContext';
 import { displayDate, isToday, todayStr } from '../dates';
 import { TaskDetail } from '../TaskDetail';
+import { ensureMediaCached } from '../media';
+import { AttachmentBadges, AudioButton, AudioQuickPlay } from '../MediaAttachments';
 import type { Subject, Task } from '../storage';
 import SettingsScreen from './SettingsScreen';
 
@@ -30,6 +31,7 @@ export default function ChildHomeScreen() {
   } = useApp();
   const insets = useSafeAreaInsets();
   const { fs, vs } = useDisplay();
+  const server = identity?.server ?? '';
 
   const [date, setDate] = useState(todayStr());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -44,6 +46,8 @@ export default function ChildHomeScreen() {
 
   const tasks = tasksByDate[date] ?? [];
   const loading = !!loadingDates[date];
+  // 详情里的 task 跟着列表更新(附件下载完成后、另一台设备改了内容)
+  const liveDetailTask = detailTask ? (tasks.find((t) => t.id === detailTask.id) ?? detailTask) : null;
 
   // 避免把 refreshTasks 的身份写进依赖(它会随数据变化而变)
   const refreshRef = useRef(refreshTasks);
@@ -53,6 +57,15 @@ export default function ChildHomeScreen() {
     setDate(next);
     refreshRef.current(next).catch(() => {});
   };
+
+  // 只要孩子翻到这一天,就把这天的附件都下载到本机。
+  // 服务器上的附件只保留 7 天,下载过之后即使超过 7 天也能正常看图/听语音/看视频。
+  // 已缓存、下载中、已过期的都会被自动跳过,所以这里的依赖变化不会造成重复请求。
+  React.useEffect(() => {
+    if (!server) return;
+    const all = tasks.flatMap((t) => t.media ?? []);
+    if (all.length > 0) ensureMediaCached(server, all);
+  }, [server, tasks]);
 
   const grouped = useMemo(() => {
     const map: { subject: Subject; tasks: Task[] }[] = [];
@@ -99,10 +112,6 @@ export default function ChildHomeScreen() {
               <Text style={[s.topBtnText, { fontSize: fs(15) }]}>设置</Text>
             </Pressable>
           </View>
-          {!connected && (
-            <Text style={[s.offline, { fontSize: fs(12) }]}>● 未连接同步服务,内容可能不是最新的</Text>
-          )}
-
           <WeekNav date={date} onChange={changeDate} marks={(d) => (tasksByDate[d]?.length ?? 0) > 0} />
         </View>
       </View>
@@ -128,7 +137,7 @@ export default function ChildHomeScreen() {
                 <ChildTaskCard
                   key={t.id}
                   task={t}
-                  server={identity?.server ?? ''}
+                  server={server}
                   onOpen={() => openDetail(t)}
                   onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
                 />
@@ -144,6 +153,9 @@ export default function ChildHomeScreen() {
         )}
       </Screen>
 
+      {/* 断网提示:顶部居中悬浮,不占布局(原来那行会把页面整体顶下去一行) */}
+      <SyncToast visible={!connected} text="未连接同步服务 · 内容可能不是最新的" />
+
       {/* 常驻渲染 + visible:只有这样才能播退场动画 */}
       <SettingsScreen
         visible={settingsOpen}
@@ -152,27 +164,23 @@ export default function ChildHomeScreen() {
         onSignOut={signOut}
       />
 
-      {/* 详情弹层:点任务文字看完整内容 / 勾选完成 / 播放语音 */}
-      {detailTask && (
+      {/* 详情弹层:点任务文字看完整内容 / 附件(图片大图、语音、视频)/ 勾选完成 */}
+      {liveDetailTask && (
         <TaskDetail
-          task={detailTask}
+          task={liveDetailTask}
           visible={detailOpen}
-          subjectName={subjectNameOf(detailTask)}
-          subjectColor={detailTask.subject_color}
+          subjectName={subjectNameOf(liveDetailTask)}
+          subjectColor={liveDetailTask.subject_color}
           date={date}
+          server={server}
           onClose={() => setDetailOpen(false)}
-          footer={
-            detailTask.has_audio && detailTask.audio_url ? (
-              <AudioRow uri={`${identity?.server ?? ''}${detailTask.audio_url}`} />
-            ) : undefined
-          }
         />
       )}
     </View>
   );
 }
 
-/** 儿童端任务卡:单行(勾选圈 + 内容 + 语音按钮),一屏能看更多条 */
+/** 儿童端任务卡:单行(勾选圈 + 内容 + 附件角标/语音按钮),一屏能看更多条 */
 function ChildTaskCard({
   task,
   server,
@@ -186,6 +194,9 @@ function ChildTaskCard({
 }) {
   const { fs, vs } = useDisplay();
   const long = task.content.length > LONG_CONTENT_HINT;
+  const media = task.media ?? [];
+  // 只有一份语音附件时,列表里直接给个播放钮(点进详情也能播)
+  const quickAudio = media.length === 1 && media[0].kind === 'audio' ? media[0] : null;
 
   return (
     <View
@@ -207,64 +218,12 @@ function ChildTaskCard({
         </Text>
       </Pressable>
       {long && <Text style={[s.moreHint, { fontSize: fs(15) }]}>›</Text>}
-      {task.has_audio && task.audio_url && <AudioButton uri={`${server}${task.audio_url}`} />}
+      {media.length > 0 && <AttachmentBadges server={server} media={media} />}
+      {quickAudio && <AudioQuickPlay server={server} media={quickAudio} />}
+      {media.length === 0 && task.has_audio && task.audio_url && (
+        <AudioButton uri={`${server}${task.audio_url}`} />
+      )}
     </View>
-  );
-}
-
-/** 详情弹层里的语音播放:一行「播放/暂停 + 说明」 */
-export function AudioRow({ uri }: { uri: string }) {
-  const player = useAudioPlayer(uri);
-  const status = useAudioPlayerStatus(player);
-  const { fs } = useDisplay();
-
-  const toggle = () => {
-    if (status.playing) {
-      player.pause();
-      return;
-    }
-    const finished = status.didJustFinish || (status.duration > 0 && status.currentTime >= status.duration - 0.1);
-    if (finished) player.seekTo(0).catch(() => {});
-    player.play();
-  };
-
-  return (
-    <Pressable style={s.audioRow} onPress={toggle} accessibilityRole="button">
-      <View style={s.audioBtn}>
-        <Text style={s.audioBtnIcon}>{status.playing ? '⏸' : '▶'}</Text>
-      </View>
-      <Text style={[s.audioRowText, { fontSize: fs(15) }]}>
-        {status.playing ? '正在播放家长录的语音…' : '播放家长录的语音'}
-      </Text>
-    </Pressable>
-  );
-}
-
-/** 语音播放按钮:只在真的有语音的任务上挂载播放器,避免每个卡片都订阅播放状态 */
-export function AudioButton({ uri }: { uri: string }) {
-  const player = useAudioPlayer(uri);
-  const status = useAudioPlayerStatus(player);
-
-  const toggle = () => {
-    if (status.playing) {
-      player.pause();
-      return;
-    }
-    // 播完之后再点,从头开始(否则会停在结尾没反应)
-    const finished = status.didJustFinish || (status.duration > 0 && status.currentTime >= status.duration - 0.1);
-    if (finished) player.seekTo(0).catch(() => {});
-    player.play();
-  };
-
-  return (
-    <Pressable
-      style={s.audioBtn}
-      onPress={toggle}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={status.playing ? '暂停语音' : '播放语音'}>
-      <Text style={s.audioBtnIcon}>{status.playing ? '⏸' : '▶'}</Text>
-    </Pressable>
   );
 }
 
@@ -290,12 +249,6 @@ const s = StyleSheet.create({
     borderColor: colors.border,
   },
   topBtnText: { fontSize: 15, color: colors.primary, fontWeight: '700' },
-  offline: {
-    color: colors.warn,
-    fontSize: 12,
-    paddingHorizontal: spacing(2),
-    paddingBottom: spacing(0.5),
-  },
   // 单行任务卡:和分组标题配合,一屏能看到的作业条数更多
   taskCard: {
     flexDirection: 'row',
@@ -309,16 +262,5 @@ const s = StyleSheet.create({
   },
   taskText: { fontSize: 17, color: colors.text },
   moreHint: { color: colors.textSub },
-  audioBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.primarySoft,
-  },
-  audioBtnIcon: { color: colors.primaryDark, fontSize: 14, fontWeight: '700' },
-  audioRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.5) },
-  audioRowText: { color: colors.primaryDark, fontWeight: '600' },
   footerHint: { textAlign: 'center', color: colors.textSub, marginTop: spacing(1) },
 });

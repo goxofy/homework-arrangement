@@ -226,7 +226,7 @@ if [ "$DO_SET" = 1 ]; then
 else
   printf '在仓库 Settings → Secrets and variables → Actions 里新增三条 secret:\n\n'
   printf '  IOS_DIST_P12_BASE64      = base64 -i %s | tr -d "\\n"\n' "$P12"
-  printf '  IOS_DIST_P12_PASSWORD    = %s\n' "$PASSWORD"
+  printf '  IOS_DIST_P12_PASSWORD    = <刚才输入的 p12 密码,出于安全不在终端显示>\n'
   printf '  IOS_PROFILE_BASE64       = base64 -i %s | tr -d "\\n"\n' "$PROFILE"
   printf '\n或者用 gh 一条命令搞定(本机已有 gh 且已登录):\n\n'
   printf '  bash scripts/ios-credentials.sh %s %s --set\n' "$(basename "$P12")" "$(basename "$PROFILE")"

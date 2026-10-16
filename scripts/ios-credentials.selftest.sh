@@ -105,6 +105,19 @@ run() { # <期望:ok|err> <输出中应包含的文字> <p12> <profile> [密码]
   pass "$label"
 }
 
+run_not_contains() { # <输出中不应包含的文字> <p12> <profile> [密码]
+  local pattern="$1" p12f="$2" prof="$3" pw="${4:-$PASS}"
+  local out code
+  out="$(bash "$SCRIPT" "$p12f" "$prof" "$pw" 2>&1)"; code=$?
+  if [ "$code" -ne 0 ]; then
+    fail "not-contains/$pattern (脚本意外失败 exit=$code)" "$out"; return
+  fi
+  if printf '%s' "$out" | grep -Fq "$pattern"; then
+    fail "not-contains/$pattern (输出泄漏了敏感值)" "$out"; return
+  fi
+  pass "not-contains/$pattern"
+}
+
 say "1) 正常凭据"
 run ok "校验通过" "$TMP/good.p12" "$TMP/ok.mobileprovision"
 run ok "App Store 分发描述文件" "$TMP/good.p12" "$TMP/ok.mobileprovision"
@@ -133,6 +146,9 @@ run err "找不到证书文件"     "$TMP/nope.p12" "$TMP/ok.mobileprovision"
 
 say "5) 快过期提醒"
 run ok "天后过期" "$TMP/good.p12" "$TMP/expiringsoon.mobileprovision"
+
+say "6) 敏感信息不写入终端"
+run_not_contains "IOS_DIST_P12_PASSWORD    = $PASS" "$TMP/good.p12" "$TMP/ok.mobileprovision"
 
 printf '\n\033[1m结果: %d passed, %d failed\033[0m\n' "$PASSED" "$FAILED"
 [ "$FAILED" -eq 0 ]

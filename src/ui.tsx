@@ -620,6 +620,64 @@ export function Empty({ text }: { text: string }) {
   );
 }
 
+/**
+ * 顶部居中的悬浮提示(类似微信顶部的「无网络」小条)。
+ *
+ * 要点:
+ * - 绝对定位 + pointerEvents="none":不占布局,不会把下面的内容顶下去一行
+ * - 断线后先沉默 SHOW_DELAY_MS 再出现,弱网抖动时不会一闪一闪
+ * - 字小、紧贴状态栏下方居中,退出时淡出
+ *
+ * 用法:放在页面根节点的最后面(它自己会浮在最上层)。
+ */
+export function SyncToast({ visible, text }: { visible: boolean; text: string }) {
+  const insets = useSafeAreaInsets();
+  const [shown, setShown] = useState(false);
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!visible) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(true), SHOW_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [visible]);
+
+  useEffect(() => {
+    const a = Animated.timing(anim, {
+      toValue: shown ? 1 : 0,
+      duration: shown ? 180 : 140,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    });
+    a.start();
+    return () => a.stop();
+  }, [shown, anim]);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.syncToastWrap,
+        { top: insets.top + 6 },
+        {
+          opacity: anim,
+          transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-8, 0] }) }],
+        },
+      ]}>
+      <View style={styles.syncToastPill}>
+        <Text style={styles.syncToastText} numberOfLines={1}>
+          {text}
+        </Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+/** 断线多久才显示提示:足够避开一次瞬时重连,又不会让人白等 */
+const SHOW_DELAY_MS = 1200;
+
 export function ErrorBar({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <Pressable onPress={onRetry} style={styles.errorBar}>
@@ -789,6 +847,23 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
   empty: { alignItems: 'center', paddingVertical: spacing(6) },
   emptyText: { color: colors.textSub, fontSize: 14 },
+
+  syncToastWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 50,
+    elevation: 50,
+  },
+  syncToastPill: {
+    maxWidth: '86%',
+    paddingHorizontal: spacing(1.5),
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(245, 158, 11, 0.94)',
+  },
+  syncToastText: { color: '#3A2A05', fontSize: 11, fontWeight: '600' },
   errorBar: {
     backgroundColor: '#FDECEC',
     borderRadius: 10,
