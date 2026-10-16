@@ -6,14 +6,14 @@
 - 依赖包只有 express / cors / ws
 - 所有数据落在 `data/` 目录(SQLite + 语音文件 + `data/media/` 附件),**备份该目录即可**
 
-### 作业附件只暂存 7 天
+### 作业附件最多暂存 7 天
 
-家长上传的作业资料(拍作业本的照片、录的语音讲解、讲解视频等)走的是**临时暂存**:
+家长上传的作业资料(作业图片、录音等)走的是**临时暂存**;服务端仍兼容历史视频附件,但当前 App 暂不新增上传视频:
 
 - 上传后落盘在 `data/media/`,同时记下 `expires_at = 上传时间 + 保留期`
 - 到期后服务端**删除文件**、但保留一条标记(客户端会显示「已过期」,不会莫名其妙消失)
 - 清理时机:服务启动时扫一遍 + 每 10 分钟扫一遍 + 每次有附件下载请求时顺手扫一下
-- 保留期默认 **7 天**,可用环境变量调整(支持小数,方便本地验证):
+- 保留期默认 **7 天**,可用环境变量缩短(支持小数,方便本地验证),但任何配置都不会超过 7 天:
 
 ```bash
 MEDIA_TTL_DAYS=3 node src/index.js     # 只保留 3 天
@@ -107,7 +107,7 @@ server {
     ssl_certificate     /etc/letsencrypt/live/hw.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/hw.example.com/privkey.pem;
 
-    client_max_body_size 25m;     # 语音 base64 上传
+    client_max_body_size 90m;     # 服务端原始附件请求上限(视频历史附件兼容)
 
     location / {
         proxy_pass http://127.0.0.1:8787;

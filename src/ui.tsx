@@ -347,7 +347,7 @@ export function TopBarAction({
 /**
  * 周导航(家长端和儿童端共用):
  * 上一周 / 下一周 + 本周七天的按钮(周一到周日)。
- * 过去的日期可任意查看,未来的日期(含未来周)一律不可选。
+ * 历史和未来日期都可查看,方便家长提前布置、孩子提前了解安排。
  */
 export function WeekNav({
   date,
@@ -362,12 +362,9 @@ export function WeekNav({
   const today = todayStr();
   const weekStart = startOfWeek(date);
   const weekDays = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(weekStart, i));
-  // 下一周只要还有「未来」就不能翻(当前周永远不能往后翻)
-  const canNextWeek = addDays(weekStart, 7) <= today;
 
   const goWeek = (delta: number) => {
-    const target = addDays(date, delta * 7);
-    onChange(target > today ? today : target);
+    onChange(addDays(date, delta * 7));
   };
 
   return (
@@ -384,31 +381,24 @@ export function WeekNav({
             {isToday(date) ? `今天 · ${displayDate(date)}` : displayDate(date)}
           </Text>
         </View>
-        <Pressable
-          style={[styles.navBtn, !canNextWeek && styles.navBtnDisabled]}
-          disabled={!canNextWeek}
-          hitSlop={8}
-          onPress={() => goWeek(1)}>
-          <Text style={[styles.navBtnText, !canNextWeek && { color: colors.textSub }]}>下一周 ›</Text>
+        <Pressable style={styles.navBtn} hitSlop={8} onPress={() => goWeek(1)}>
+          <Text style={styles.navBtnText}>下一周 ›</Text>
         </Pressable>
       </View>
 
       <View style={styles.weekRow}>
         {weekDays.map((d) => {
-          const future = d > today;
           const active = d === date;
           const isTodayDate = d === today;
           const has = marks?.(d) ?? false;
           return (
             <Pressable
               key={d}
-              disabled={future}
               onPress={() => onChange(d)}
               style={[
                 styles.weekBtn,
                 isTodayDate && !active && styles.weekBtnToday,
                 active && styles.weekBtnActive,
-                future && styles.weekBtnDisabled,
               ]}>
               <Text style={[styles.weekBtnDay, active && styles.weekBtnTextActive]}>
                 {weekdayShort(d)}
@@ -741,7 +731,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
-  navBtnDisabled: { opacity: 0.5 },
   navBtnText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   dateCenter: { flex: 1, alignItems: 'center' },
   dateTitle: { fontSize: 16, fontWeight: '800', color: colors.text },
@@ -765,7 +754,6 @@ const styles = StyleSheet.create({
   },
   weekBtnToday: { borderColor: colors.primary, borderWidth: 1.5 },
   weekBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  weekBtnDisabled: { opacity: 0.42 },
   weekBtnDay: { fontSize: 11, color: colors.textSub },
   weekBtnNum: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 1 },
   weekBtnTextActive: { color: '#fff' },

@@ -1,6 +1,7 @@
 // 作业附件(图片 / 音视频 / 文件)的通用 UI:
-// - 家长端:选图片视频、录一段语音、选系统文件,以及待上传列表
-// - 两端:展示附件(图片缩略图点开看大图、语音播放、视频播放、文件条目)
+// - 家长端:选图片、录一段语音、选系统文件,以及待上传列表
+// - 两端:展示附件(图片缩略图点开看大图、语音播放、历史视频播放、文件条目)
+// - 新增上传暂不接受视频,但保留历史视频的展示兼容性
 //
 // 附件本体只存在服务器上 7 天(见 server/src/util.js),下载到本机后长期保留,
 // 所以这里所有展示都优先用本机缓存(media.ts 的 useCachedMedia)。
@@ -49,6 +50,14 @@ export interface PickResult {
   items: PendingAttachment[];
   /** 被跳过的文件及原因(超大等),调用方提示用 */
   skipped: string[];
+}
+
+/** 与服务端 MEDIA_MAX_PER_TASK 保持一致 */
+export const MAX_ATTACHMENTS_PER_TASK = 20;
+
+function normalizeAttachmentLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return MAX_ATTACHMENTS_PER_TASK;
+  return Math.max(0, Math.min(MAX_ATTACHMENTS_PER_TASK, Math.floor(limit)));
 }
 
 /** 与服务端 MEDIA_MAX_BYTES 保持一致,超了就不上传了,省得白等 */
@@ -109,7 +118,8 @@ function stagingDir(): Directory {
 /** 统一的入口:file:// 直接用,content:// 先拷到本机暂存目录 */
 async function stageIfNeeded(uri: string, name: string): Promise<string> {
   if (uri.startsWith('file://')) return uri;
-  const dest = new File(stagingDir(), `${Date.now().toString(36)}-${name.replace(/[^\w.\-]/g, '_')}`);
+  const safeName = name.replace(/[^\w.\-]/g, '_') || 'file';
+  const dest = new File(stagingDir(), `${nextKey()}-${safeName}`);
   await new File(uri).copy(dest, { overwrite: true });
   return dest.uri;
 }
@@ -130,69 +140,112 @@ function oversizeMessage(kind: MediaKind, size?: number): string | null {
   return size > limit ? `超过 ${MAX_MB[kind]}MB` : null;
 }
 
-/** 从相册选图片/视频(可多选) */
-export async function pickLibraryMedia(): Promise<PickResult> {
-  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted && permission.canAskAgain === false) {
-    return { items: [], skipped: ['没有相册权限,请到系统设置里允许访问照片'] };
+/** 尽量补齐系统选择器没返回的文件大小;读不到时仍由服务端做最终校验 */
+function fileSizeOf(uri: string, reported?: number | null): number | undefined {
+  if (reported && reported > 0) return reported;
+  try {
+    const size = new File(uri).size;
+    return size > 0 ? size : undefined;
+  } catch {
+    return undefined;
   }
+}
+
+/** 从相册选图片(可多选,新增上传暂不接受视频) */
+export async function pickLibraryMedia(
+  limit = MAX_ATTACHMENTS_PER_TASK
+): Promise<PickResult> {
+  const selectionLimit = normalizeAttachmentLimit(limit);
+  if (selectionLimit === 0) {
+    return { items: [], skipped: [`每条作业最多 ${MAX_ATTACHMENTS_PER_TASK} 个附件`] };
+  }
+
+  // iOS 16+/新版 Android 使用系统照片选择器,无需申请整库访问权限。
+  // Compatible 尽量把 HEIC 等格式转换为跨平台更容易显示的表示。
   const res = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ['images', 'videos'],
+    mediaTypes: ['images'],
     allowsMultipleSelection: true,
-    selectionLimit: 0,
+    selectionLimit,
+    orderedSelection: true,
     quality: 0.85,
+    preferredAssetRepresentationMode:
+      ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+    shouldDownloadFromNetwork: true,
   });
   if (res.canceled) return { items: [], skipped: [] };
 
   const items: PendingAttachment[] = [];
   const skipped: string[] = [];
-  for (const asset of res.assets) {
-    const fallbackMime = asset.type === 'video' ? 'video/mp4' : 'image/jpeg';
-    const mime = asset.mimeType || mimeFromName(asset.fileName || asset.uri) || fallbackMime;
+  for (const asset of res.assets.slice(0, selectionLimit)) {
+    const mime = asset.mimeType || mimeFromName(asset.fileName || asset.uri) || 'image/jpeg';
     const kind = kindOf(mime);
     const name = defaultName(kind, mime, asset.fileName);
-    const tooBig = oversizeMessage(kind, asset.fileSize ?? undefined);
+    if (kind !== 'image') {
+      skipped.push(`${name}(暂不支持上传视频)`);
+      continue;
+    }
+    const size = fileSizeOf(asset.uri, asset.fileSize);
+    const tooBig = oversizeMessage(kind, size);
     if (tooBig) {
       skipped.push(`${name}(${tooBig})`);
       continue;
     }
-    items.push({ key: nextKey(), uri: asset.uri, mime, name, kind, size: asset.fileSize ?? undefined });
+    items.push({ key: nextKey(), uri: asset.uri, mime, name, kind, size });
+  }
+  if (res.assets.length > selectionLimit) {
+    skipped.push(`最多还能添加 ${selectionLimit} 个附件,其余图片未加入`);
   }
   return { items, skipped };
 }
 
-/** 从系统文件里选任意文件(音频文件、PDF 等) */
-export async function pickSystemFiles(): Promise<PickResult> {
+/** 从系统文件里选音频/PDF等文件;新增上传暂不接受视频 */
+export async function pickSystemFiles(
+  limit = MAX_ATTACHMENTS_PER_TASK
+): Promise<PickResult> {
+  const selectionLimit = normalizeAttachmentLimit(limit);
+  if (selectionLimit === 0) {
+    return { items: [], skipped: [`每条作业最多 ${MAX_ATTACHMENTS_PER_TASK} 个附件`] };
+  }
+
   const res = await File.pickFileAsync({ multipleFiles: true });
   if (res.canceled) return { items: [], skipped: [] };
 
   const items: PendingAttachment[] = [];
   const skipped: string[] = [];
-  for (const picked of res.result) {
+  for (const picked of res.result.slice(0, selectionLimit)) {
     const rawName = picked.name || 'file';
     const mime = picked.type || mimeFromName(rawName) || 'application/octet-stream';
     const kind = kindOf(mime);
-    const tooBig = oversizeMessage(kind, picked.size || undefined);
-    if (tooBig) {
-      skipped.push(`${rawName}(${tooBig})`);
+    if (kind === 'video') {
+      skipped.push(`${rawName}(暂不支持上传视频)`);
       continue;
     }
+
     // 安卓的文件选择器给的是 content:// URI,先拷进暂存目录;
-    // 万一拷贝不支持(个别机型/网盘类文档),就直接拿原 URI 试上传
+    // 万一拷贝不支持(个别机型/网盘类文档),就直接拿原 URI 试上传。
     let uri = picked.uri;
     try {
       uri = await stageIfNeeded(picked.uri, rawName);
     } catch {
       /* 继续用原 URI */
     }
-    items.push({
-      key: nextKey(),
-      uri,
-      mime,
-      name: rawName,
-      kind,
-      size: picked.size || undefined,
-    });
+    const size = fileSizeOf(uri, picked.size);
+    const tooBig = oversizeMessage(kind, size);
+    if (tooBig) {
+      skipped.push(`${rawName}(${tooBig})`);
+      if (uri !== picked.uri) {
+        try {
+          new File(uri).delete();
+        } catch {
+          /* 暂存文件不存在就忽略 */
+        }
+      }
+      continue;
+    }
+    items.push({ key: nextKey(), uri, mime, name: rawName, kind, size });
+  }
+  if (res.result.length > selectionLimit) {
+    skipped.push(`最多还能添加 ${selectionLimit} 个附件,其余文件未加入`);
   }
   return { items, skipped };
 }
@@ -207,7 +260,7 @@ export function recordingToAttachment(uri: string, seconds: number, size?: numbe
     mime: 'audio/m4a',
     name: `录音-${hhmm}-${Math.max(1, Math.round(seconds))}秒.m4a`,
     kind: 'audio',
-    size,
+    size: fileSizeOf(uri, size),
   };
 }
 
@@ -273,18 +326,23 @@ export function RecordAudioButton({ onPicked, disabled }: { onPicked: (a: Pendin
 // ---------- 添加附件的按钮组 ----------
 
 /**
- * 三个入口:相册(图片/视频)、App 内录音、系统文件。
+ * 三个入口:相册图片、App 内录音、系统文件。
  * 选好后统一回调 onItems,超限/失败的文件在这里提示,不打扰调用方。
  */
 export function AttachButtons({
   onItems,
   disabled,
+  remainingSlots = MAX_ATTACHMENTS_PER_TASK,
 }: {
   onItems: (items: PendingAttachment[]) => void;
   disabled?: boolean;
+  /** 这条作业还可以添加多少个附件 */
+  remainingSlots?: number;
 }) {
   const { fs } = useDisplay();
   const [busy, setBusy] = useState(false);
+  const available = normalizeAttachmentLimit(remainingSlots);
+  const unavailable = !!disabled || busy || available === 0;
 
   const report = (skipped: string[]) => {
     if (skipped.length > 0) {
@@ -293,12 +351,12 @@ export function AttachButtons({
   };
 
   const run = async (fn: () => Promise<PickResult>) => {
-    if (busy) return;
+    if (unavailable) return;
     setBusy(true);
     try {
       const { items, skipped } = await fn();
       report(skipped);
-      if (items.length > 0) onItems(items);
+      if (items.length > 0) onItems(items.slice(0, available));
     } catch {
       Alert.alert('打开失败', '系统选择器没能打开,请重试。');
     } finally {
@@ -307,24 +365,29 @@ export function AttachButtons({
   };
 
   return (
-    <View style={s.pickRow}>
-      <Pressable
-        disabled={disabled || busy}
-        onPress={() => run(pickLibraryMedia)}
-        style={({ pressed }) => [s.pickBtn, (disabled || busy) && { opacity: 0.5 }, pressed && { opacity: 0.8 }]}>
-        <Text style={[s.pickBtnText, { fontSize: fs(13) }]}>🖼 图片/视频</Text>
-      </Pressable>
+    <View style={{ gap: spacing(0.75) }}>
+      <View style={s.pickRow}>
+        <Pressable
+          disabled={unavailable}
+          onPress={() => run(() => pickLibraryMedia(available))}
+          style={({ pressed }) => [s.pickBtn, unavailable && { opacity: 0.5 }, pressed && { opacity: 0.8 }]}>
+          <Text style={[s.pickBtnText, { fontSize: fs(13) }]}>🖼 选图片</Text>
+        </Pressable>
 
-      <RecordAudioButton disabled={disabled || busy} onPicked={(a) => onItems([a])} />
+        <RecordAudioButton disabled={unavailable} onPicked={(a) => onItems([a])} />
 
-      <Pressable
-        disabled={disabled || busy}
-        onPress={() => run(pickSystemFiles)}
-        style={({ pressed }) => [s.pickBtn, (disabled || busy) && { opacity: 0.5 }, pressed && { opacity: 0.8 }]}>
-        <Text style={[s.pickBtnText, { fontSize: fs(13) }]}>📄 选文件</Text>
-      </Pressable>
+        <Pressable
+          disabled={unavailable}
+          onPress={() => run(() => pickSystemFiles(available))}
+          style={({ pressed }) => [s.pickBtn, unavailable && { opacity: 0.5 }, pressed && { opacity: 0.8 }]}>
+          <Text style={[s.pickBtnText, { fontSize: fs(13) }]}>📄 选文件</Text>
+        </Pressable>
 
-      {busy && <ActivityIndicator size="small" color={colors.primary} />}
+        {busy && <ActivityIndicator size="small" color={colors.primary} />}
+      </View>
+      {available === 0 && (
+        <Text style={[s.hint, { fontSize: fs(11) }]}>每条作业最多 {MAX_ATTACHMENTS_PER_TASK} 个附件</Text>
+      )}
     </View>
   );
 }

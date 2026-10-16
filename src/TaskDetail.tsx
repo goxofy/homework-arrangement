@@ -10,7 +10,13 @@ import { useDisplay } from './display';
 import { useApp } from './AppContext';
 import { displayDate, formatTime } from './dates';
 import type { Task, TaskMedia } from './storage';
-import { AttachmentStrip, AttachButtons, AudioRow, type PendingAttachment } from './MediaAttachments';
+import {
+  AttachmentStrip,
+  AttachButtons,
+  AudioRow,
+  MAX_ATTACHMENTS_PER_TASK,
+  type PendingAttachment,
+} from './MediaAttachments';
 
 export function TaskDetail({
   task,
@@ -112,12 +118,16 @@ export function TaskDetail({
         {onAddMedia && server ? (
           <Card style={{ gap: vs(10), marginTop: spacing(1.5) }}>
             <SectionTitle>添加资料</SectionTitle>
-            <AttachButtons onItems={onAddMedia} disabled={uploadingMedia} />
+            <AttachButtons
+              onItems={onAddMedia}
+              disabled={uploadingMedia}
+              remainingSlots={MAX_ATTACHMENTS_PER_TASK - media.length}
+            />
             {uploadingMedia && (
               <View style={s.uploadingRow}>
                 <ActivityIndicator size="small" color={colors.primary} />
                 <Text style={[s.uploadingText, { fontSize: fs(12) }]}>
-                  正在上传…(图片、语音、视频会存到服务器 7 天,孩子在有效期内打开这一天即可看到)
+                  正在上传…(图片、语音和文件最多在服务器保留 7 天,孩子在有效期内打开即可保存到本机)
                 </Text>
               </View>
             )}

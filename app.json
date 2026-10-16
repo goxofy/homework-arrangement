@@ -14,7 +14,7 @@
       "infoPlist": {
         "NSMicrophoneUsageDescription": "用于录制语音作业(自动转为文字,或作为语音讲解附件),方便家长布置作业。",
         "NSSpeechRecognitionUsageDescription": "用于把您说的话转成作业文字。",
-        "NSPhotoLibraryUsageDescription": "用于选择您自己的作业照片、音视频作为作业附件。附件只上传到您自建的服务器,应用不会访问、收集或上传到其他任何地方。",
+        "NSPhotoLibraryUsageDescription": "用于选择您自己的作业图片作为作业附件。附件只上传到您自建的服务器,应用不会访问、收集或上传到其他任何地方。",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -43,7 +43,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "用于选择您自己的作业照片、音视频作为作业附件。附件只上传到您自建的服务器。",
+          "photosPermission": "用于选择您自己的作业图片作为作业附件。附件只上传到您自建的服务器。",
           "cameraPermission": false
         }
       ],
