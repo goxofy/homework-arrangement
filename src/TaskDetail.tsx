@@ -3,13 +3,14 @@
 // 同时提供「标记完成」和对该条作业的操作(家长端有编辑/删除)。
 
 import React, { useEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Button, Card, DoneCircle, GroupHeader, Overlay, Screen, TopBar, TopBarAction } from './ui';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Button, Card, DoneCircle, GroupHeader, Overlay, Screen, SectionTitle, TopBar, TopBarAction } from './ui';
 import { colors, spacing } from './theme';
 import { useDisplay } from './display';
 import { useApp } from './AppContext';
 import { displayDate, formatTime } from './dates';
-import type { Task } from './storage';
+import type { Task, TaskMedia } from './storage';
+import { AttachmentStrip, AttachButtons, AudioRow, type PendingAttachment } from './MediaAttachments';
 
 export function TaskDetail({
   task,
@@ -17,10 +18,13 @@ export function TaskDetail({
   subjectName,
   subjectColor,
   date,
+  server,
   onClose,
   onEdit,
   onDelete,
-  footer,
+  onAddMedia,
+  onDeleteMedia,
+  uploadingMedia,
 }: {
   task: Task;
   /** 显隐开关(父级常驻渲染本组件,关闭时传 false,退场动画播完才卸载) */
@@ -29,16 +33,23 @@ export function TaskDetail({
   subjectColor?: string | null;
   /** 这条作业归属的日期(YYYY-MM-DD) */
   date: string;
+  /** 服务器地址(附件下载/播放要用) */
+  server?: string;
   onClose: () => void;
   /** 家长端:进入编辑 */
   onEdit?: () => void;
   /** 家长端:删除该条 */
   onDelete?: () => void;
-  /** 儿童端:语音播放按钮等附加内容 */
-  footer?: React.ReactNode;
+  /** 家长端:在详情里继续添加附件(图标/录音/文件),由父级负责上传 */
+  onAddMedia?: (items: PendingAttachment[]) => void;
+  /** 家长端:删除某个附件 */
+  onDeleteMedia?: (media: TaskMedia) => void;
+  /** 附件正在上传(家长端显示进度) */
+  uploadingMedia?: boolean;
 }) {
   const { fs, vs, lh } = useDisplay();
   const { setTaskDone } = useApp();
+  const media = task.media ?? [];
 
   // 本地维护完成状态:弹层开着时点勾选立刻有反馈,
   // 另一台设备改了也会跟着刷新(父级传下来的 task 变了)
@@ -82,7 +93,36 @@ export function TaskDetail({
           </Text>
         </Card>
 
-        {footer ? <Card style={{ gap: vs(10) }}>{footer}</Card> : null}
+        {/* 老版「一条作业一段短语音」(说话转文字录下来的)仍然可以播 */}
+        {task.has_audio && task.audio_url && server ? (
+          <Card style={{ marginTop: spacing(1.5) }}>
+            <AudioRow uri={`${server}${task.audio_url}`} label="播放家长录的语音" />
+          </Card>
+        ) : null}
+
+        {/* 附件:图片看大图、语音/视频播放、文件条目(家长端可加可删) */}
+        {media.length > 0 && server ? (
+          <Card style={{ gap: vs(10), marginTop: spacing(1.5) }}>
+            <SectionTitle>作业资料 {media.length > 0 ? `(${media.length})` : ''}</SectionTitle>
+            <AttachmentStrip server={server} media={media} onDelete={onDeleteMedia} />
+          </Card>
+        ) : null}
+
+        {/* 家长端:详情里可以继续补图片/录音/文件 */}
+        {onAddMedia && server ? (
+          <Card style={{ gap: vs(10), marginTop: spacing(1.5) }}>
+            <SectionTitle>添加资料</SectionTitle>
+            <AttachButtons onItems={onAddMedia} disabled={uploadingMedia} />
+            {uploadingMedia && (
+              <View style={s.uploadingRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={[s.uploadingText, { fontSize: fs(12) }]}>
+                  正在上传…(图片、语音、视频会存到服务器 7 天,孩子在有效期内打开这一天即可看到)
+                </Text>
+              </View>
+            )}
+          </Card>
+        ) : null}
 
         <Card style={{ marginTop: spacing(1.5) }}>
           <Pressable onPress={toggle} style={s.doneRow} accessibilityRole="button">
@@ -122,6 +162,8 @@ export function TaskDetail({
 
 const s = StyleSheet.create({
   meta: { color: colors.textSub },
+  uploadingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(1) },
+  uploadingText: { color: colors.textSub, flex: 1, lineHeight: 17 },
   doneRow: { flexDirection: 'row', alignItems: 'center', gap: spacing(1.5), paddingVertical: spacing(0.75) },
   doneText: { color: colors.text, fontWeight: '600' },
 });

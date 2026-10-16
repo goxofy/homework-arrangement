@@ -4,6 +4,13 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  AttachmentBadges,
+  AttachButtons,
+  PendingAttachmentList,
+  resetUploadStaging,
+  type PendingAttachment,
+} from '../MediaAttachments';
+import {
   Button,
   Card,
   CONTENT_MAX_WIDTH,
@@ -13,6 +20,7 @@ import {
   Overlay,
   Screen,
   TopBar,
+  SyncToast,
   TopBarAction,
   WeekNav,
 } from '../ui';
@@ -21,7 +29,7 @@ import { useDisplay } from '../display';
 import { useApp } from '../AppContext';
 import { displayDate, formatTime, todayStr } from '../dates';
 import { TaskDetail } from '../TaskDetail';
-import type { Subject, Task } from '../storage';
+import type { Subject, Task, TaskMedia } from '../storage';
 import { useSpeechRecognition } from '../speech';
 
 /** 内容超过这个长度就在任务行末尾显示一个「›」,提示可以点开看全文 */
@@ -41,6 +49,8 @@ export default function ParentHomeScreen({
     loadingDates,
     connected,
     addTask,
+    uploadTaskMedia,
+    removeTaskMedia,
     editTask,
     removeTask,
     setTaskDone,
@@ -56,6 +66,8 @@ export default function ParentHomeScreen({
   // 详情弹层:task 留着不置空,这样关闭时退场动画期间内容还在,不会闪空
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  // 详情里补传附件时的进行状态
+  const [uploadingMedia, setUploadingMedia] = useState(false);
 
   const openDetail = (t: Task) => {
     setDetailTask(t);
@@ -63,6 +75,8 @@ export default function ParentHomeScreen({
   };
 
   const tasks = tasksByDate[date] ?? [];
+  // 详情弹层里的 task 要跟着列表一起更新(补了附件、别处改了内容)
+  const liveDetailTask = detailTask ? (tasks.find((t) => t.id === detailTask.id) ?? detailTask) : null;
   const loading = !!loadingDates[date];
   const doneCount = tasks.filter((t) => t.done).length;
 
@@ -103,6 +117,32 @@ export default function ParentHomeScreen({
     setEditing(task);
   };
 
+  /** 详情里补附件:选完立刻上传(失败只提示,已上传的不受影响) */
+  const addMediaToTask = (items: PendingAttachment[]) => {
+    const target = liveDetailTask;
+    if (!target) return;
+    setUploadingMedia(true);
+    uploadTaskMedia(target.id, date, items)
+      .then((failed) => {
+        resetUploadStaging();
+        if (failed.length > 0) {
+          Alert.alert(
+            '部分附件没能上传',
+            `${failed.map((f) => `${f.name}:${f.reason}`).join('\n')}\n\n可以稍后在详情里重新添加。`
+          );
+        }
+      })
+      .catch(() => Alert.alert('上传失败', '网络或服务器不可用,请稍后重试。'))
+      .finally(() => setUploadingMedia(false));
+  };
+
+  const deleteMediaFromTask = (media: TaskMedia) => {
+    Alert.alert('删除附件', `确定删除「${media.name ?? '该附件'}」吗?`, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: () => removeTaskMedia(media, date).catch(() => {}) },
+    ]);
+  };
+
   return (
     // 根节点不加安全区 padding,弹层(Overlay)才能覆盖整个屏幕
     <View style={s.root}>
@@ -126,12 +166,6 @@ export default function ParentHomeScreen({
               <Text style={[s.topBtnText, { fontSize: fs(14) }]}>设置</Text>
             </Pressable>
           </View>
-          {!connected && (
-            <Text style={[s.offline, { fontSize: fs(12) }]}>
-              ● 未连接同步服务,改动可能不同步到孩子设备
-            </Text>
-          )}
-
           {/* 周导航:家长端也能翻阅历史(和儿童端一致,不能翻到未来) */}
           <WeekNav date={date} onChange={changeDate} marks={(d) => (tasksByDate[d]?.length ?? 0) > 0} />
         </View>
@@ -163,6 +197,7 @@ export default function ParentHomeScreen({
                   <TaskRow
                     key={t.id}
                     task={t}
+                    server={identity?.server ?? ''}
                     onOpen={() => openDetail(t)}
                     onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
                     onEdit={() => setEditing(t)}
@@ -203,16 +238,23 @@ export default function ParentHomeScreen({
         <Button title="＋ 添加作业" onPress={() => openAdd()} style={{ flex: 1 }} />
       </View>
 
-      {/* 添加作业弹层:文字输入为主,可选语音转写辅助 */}
+      {/* 添加作业弹层:文字输入为主,可选语音转写辅助 + 附图/录音/文件 */}
       <AddTaskModal
         visible={addOpen}
         subjects={activeSubjects}
         date={date}
         initial={presetSubjectId ? { subject_id: presetSubjectId, content: '' } : undefined}
         onClose={() => setAddOpen(false)}
-        onSubmit={async (payload) => {
-          await addTask(payload);
+        onSubmit={async (payload, onProgress) => {
+          const { failed } = await addTask(payload, onProgress);
+          resetUploadStaging();
           setAddOpen(false);
+          if (failed.length > 0) {
+            Alert.alert(
+              '作业已保存,但有附件没传上去',
+              `${failed.map((f) => `${f.name}:${f.reason}`).join('\n')}\n\n可以在作业详情里重新添加。`
+            );
+          }
         }}
       />
 
@@ -233,17 +275,24 @@ export default function ParentHomeScreen({
         }}
       />
 
-      {/* 详情弹层:点任务文字进来,看完整内容 / 勾选完成 / 编辑 / 删除 */}
-      {detailTask && (
+      {/* 断网提示:顶部居中悬浮,不占布局(原来那行会把页面整体顶下去一行) */}
+      <SyncToast visible={!connected} text="未连接同步服务 · 改动可能不同步到孩子设备" />
+
+      {/* 详情弹层:点任务文字进来,看完整内容 / 附件 / 勾选完成 / 编辑 / 删除 */}
+      {liveDetailTask && (
         <TaskDetail
-          task={detailTask}
+          task={liveDetailTask}
           visible={detailOpen}
-          subjectName={subjectName(detailTask.subject_id)}
-          subjectColor={detailTask.subject_color}
+          subjectName={subjectName(liveDetailTask.subject_id)}
+          subjectColor={liveDetailTask.subject_color}
           date={date}
+          server={identity?.server ?? ''}
           onClose={() => setDetailOpen(false)}
-          onEdit={() => openEditFromDetail(detailTask)}
-          onDelete={() => removeTask(detailTask.id, date).catch(() => {})}
+          onEdit={() => openEditFromDetail(liveDetailTask)}
+          onDelete={() => removeTask(liveDetailTask.id, date).catch(() => {})}
+          onAddMedia={addMediaToTask}
+          onDeleteMedia={deleteMediaFromTask}
+          uploadingMedia={uploadingMedia}
         />
       )}
     </View>
@@ -256,6 +305,7 @@ export default function ParentHomeScreen({
  */
 export function TaskRow({
   task,
+  server = '',
   onOpen,
   onToggle,
   onEdit,
@@ -263,6 +313,8 @@ export function TaskRow({
   readOnly,
 }: {
   task: Task;
+  /** 服务器地址:列表里显示附件缩略图要用 */
+  server?: string;
   onOpen?: () => void;
   onToggle?: () => void;
   onEdit?: () => void;
@@ -271,6 +323,7 @@ export function TaskRow({
 }) {
   const { fs, vs } = useDisplay();
   const long = task.content.length > LONG_CONTENT_HINT;
+  const media = task.media ?? [];
 
   return (
     <View
@@ -292,7 +345,8 @@ export function TaskRow({
         </Text>
       </Pressable>
       {long && <Text style={[s.moreHint, { fontSize: fs(13) }]}>›</Text>}
-      {task.has_audio && <Text style={{ fontSize: fs(12) }}>🎵</Text>}
+      {media.length > 0 && !!server && <AttachmentBadges server={server} media={media} />}
+      {media.length === 0 && task.has_audio && <Text style={{ fontSize: fs(12) }}>🎵</Text>}
       <Text style={[s.timeText, { fontSize: fs(11) }]}>{formatTime(task.created_at)}</Text>
       {!readOnly && (
         <View style={s.taskActions}>
@@ -330,11 +384,17 @@ export function AddTaskModal({
   title?: string;
   allowVoice?: boolean;
   onClose: () => void;
-  onSubmit: (payload: { date: string; subject_id: string; content: string }) => Promise<void>;
+  onSubmit: (
+    payload: { date: string; subject_id: string; content: string; files: PendingAttachment[] },
+    onProgress: (index: number, total: number, name: string) => void
+  ) => Promise<void>;
 }) {
   const { fs, lh } = useDisplay();
   const [subjectId, setSubjectId] = useState<string>(initial?.subject_id || subjects[0]?.id || '');
   const [content, setContent] = useState(initial?.content ?? '');
+  // 附图/录音/文件:选好先列在这里,保存时跟着作业一起上传
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [uploading, setUploading] = useState<{ index: number; total: number; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 本次识别开始前的已有文字,最终转写会追加在它后面
@@ -351,6 +411,8 @@ export function AddTaskModal({
     if (visible) {
       setSubjectId(initial?.subject_id || subjects[0]?.id || '');
       setContent(initial?.content ?? '');
+      setAttachments([]);
+      setUploading(null);
       setError(null);
       baseContentRef.current = initial?.content ?? '';
     } else if (speech.recognizing) {
@@ -372,10 +434,14 @@ export function AddTaskModal({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit({ date, subject_id: subjectId, content: content.trim() });
+      await onSubmit(
+        { date, subject_id: subjectId, content: content.trim(), files: allowVoice ? attachments : [] },
+        (index, total, name) => setUploading({ index, total, name })
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败,请重试');
     } finally {
+      setUploading(null);
       setBusy(false);
     }
   };
@@ -432,6 +498,27 @@ export function AddTaskModal({
           />
 
           {allowVoice && (
+            <>
+              <Text style={[s.label, { fontSize: fs(14) }]}>附图 / 录音 / 文件(可选)</Text>
+              <AttachButtons
+                disabled={busy}
+                onItems={(items) => setAttachments((prev) => [...prev, ...items])}
+              />
+              <PendingAttachmentList
+                items={attachments}
+                onRemove={(key) => setAttachments((prev) => prev.filter((a) => a.key !== key))}
+                uploadingIndex={busy && uploading && uploading.index < attachments.length ? uploading.index : null}
+              />
+              {attachments.length > 0 && (
+                <Text style={[s.hint, { fontSize: fs(11) }]}>
+                  附件会上传到你的服务器暂存(默认 7 天);孩子在有效期内打开这一天,就会自动下载到 iPad
+                  上长期保存。
+                </Text>
+              )}
+            </>
+          )}
+
+          {allowVoice && (
             <View style={s.voiceBox}>
               {speech.recognizing ? (
                 <>
@@ -456,7 +543,13 @@ export function AddTaskModal({
           )}
 
           {error && <Text style={s.error}>{error}</Text>}
-          {busy && <Text style={s.hint}>保存中…</Text>}
+          {busy && (
+            <Text style={s.hint}>
+              {uploading && uploading.index < uploading.total
+                ? `保存并上传附件 ${uploading.index + 1}/${uploading.total}${uploading.name ? `·${uploading.name}` : ''}…`
+                : '保存中…'}
+            </Text>
+          )}
         </Card>
       </Screen>
     </Overlay>
@@ -485,12 +578,6 @@ const s = StyleSheet.create({
     borderColor: colors.border,
   },
   topBtnText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
-  offline: {
-    color: colors.warn,
-    fontSize: 12,
-    paddingHorizontal: spacing(2),
-    paddingBottom: spacing(0.5),
-  },
   // 单行任务行:高度压到最小,一屏能多看几条
   taskRow: {
     flexDirection: 'row',

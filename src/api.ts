@@ -1,7 +1,17 @@
 // 客户端 API 封装:与自建服务端通信。
 
-import type { Subject, Task } from './storage';
+import { File, UploadType } from 'expo-file-system';
+import type { Subject, Task, MediaKind } from './storage';
 import { normalizeServer } from './storage';
+
+/** 待上传的本地附件 */
+export interface UploadFile {
+  /** 本机文件 URI(file://...) */
+  uri: string;
+  mime: string;
+  /** 原始文件名(服务端只用来展示与推断扩展名) */
+  name: string;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -126,6 +136,56 @@ export const api = {
 
   async deleteTask(server: string, code: string, tid: string): Promise<void> {
     await request(server, `/api/rooms/${encodeURIComponent(code)}/tasks/${tid}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * 上传作业附件(图片 / 音视频 / 文件)。
+   *
+   * 请求体就是文件字节流(不走 base64,大视频才传得动),元数据放 query,
+   * 这样服务端不用引入 multipart 解析依赖。iOS/Android 都用 expo-file-system 原生上传,
+   * 内存里不会一次性装下整个文件。
+   */
+  async uploadTaskMedia(
+    server: string,
+    code: string,
+    tid: string,
+    file: UploadFile,
+    onProgress?: (sent: number, total: number) => void
+  ): Promise<{ id: string; kind: MediaKind; expires_at: number }> {
+    const base = normalizeServer(server);
+    const path =
+      `/api/rooms/${encodeURIComponent(code)}/tasks/${encodeURIComponent(tid)}/media` +
+      `?mime=${encodeURIComponent(file.mime)}&name=${encodeURIComponent(file.name)}`;
+    let res;
+    try {
+      res = await new File(file.uri).upload(`${base}${path}`, {
+        httpMethod: 'POST',
+        uploadType: UploadType.BINARY_CONTENT,
+        mimeType: file.mime,
+        headers: { 'Content-Type': file.mime },
+        onProgress: onProgress
+          ? ({ bytesSent, totalBytes }) => onProgress(bytesSent, totalBytes)
+          : undefined,
+      });
+    } catch {
+      throw new ApiError(0, `附件上传失败,请检查网络或服务器(${base})`);
+    }
+    let data: any = null;
+    try {
+      data = res.body ? JSON.parse(res.body) : null;
+    } catch {
+      /* 非 JSON 响应 */
+    }
+    if (res.status < 200 || res.status >= 300) {
+      throw new ApiError(res.status, data?.error || `上传失败(${res.status})`);
+    }
+    return data as { id: string; kind: MediaKind; expires_at: number };
+  },
+
+  async deleteTaskMedia(server: string, code: string, mid: string): Promise<void> {
+    await request(server, `/api/rooms/${encodeURIComponent(code)}/media/${encodeURIComponent(mid)}`, {
       method: 'DELETE',
     });
   },

@@ -12,6 +12,29 @@ export interface Subject {
   archived: number; // sqlite 整数 0/1
 }
 
+/** 附件类型:决定在两端怎么展示 */
+export type MediaKind = 'image' | 'audio' | 'video' | 'file';
+
+/**
+ * 作业附件(图片 / 音视频 / 文件)。
+ * 服务器只暂存 7 天(见服务端 MEDIA_TTL_DAYS),儿童端在本机长期保留已下载的副本。
+ */
+export interface TaskMedia {
+  id: string;
+  kind: MediaKind;
+  /** 原始文件名(展示用,可能是空) */
+  name: string | null;
+  mime: string;
+  size: number;
+  created_at: number;
+  /** 服务器上的过期时间(毫秒时间戳) */
+  expires_at: number;
+  /** 服务器上的文件已被清理(7 天到了),本机若已下载仍可正常看/听 */
+  expired: boolean;
+  /** 相对路径,需要拼上服务器地址 */
+  url: string;
+}
+
 export interface Task {
   id: string;
   for_date: string; // YYYY-MM-DD
@@ -24,6 +47,8 @@ export interface Task {
   audio_url: string | null;
   audio_mime: string | null;
   audio_size: number | null;
+  /** 该条作业的附件(老服务端可能没有这个字段,读取时用 ?? [] 兜底) */
+  media?: TaskMedia[];
   created_at: number;
   updated_at: number;
 }
