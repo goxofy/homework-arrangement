@@ -203,6 +203,8 @@ function removeMediaFile(mediaPath) {
 }
 
 function serializeMedia(roomCode, row) {
+  // 兼容旧配置创建的行:有效期不能超过当前服务端允许的最长保留期。
+  const expiresAt = Math.min(row.expires_at, row.created_at + MEDIA_TTL_MS);
   return {
     id: row.id,
     kind: row.kind,
@@ -210,8 +212,9 @@ function serializeMedia(roomCode, row) {
     mime: row.mime,
     size: row.size,
     created_at: row.created_at,
-    expires_at: row.expires_at,
-    expired: !!row.deleted_at,
+    expires_at: expiresAt,
+    // 到点就立即告诉客户端「已过期」,不必等下一轮 10 分钟清理任务先写 deleted_at。
+    expired: !!row.deleted_at || expiresAt <= now(),
     url: `/api/rooms/${encodeURIComponent(roomCode)}/media/${row.id}`,
   };
 }
@@ -272,20 +275,22 @@ export function deleteMedia(roomCode, mediaId) {
 
 /** 到期的附件:先删文件,再打个 deleted_at 标记(行留着,客户端才能提示「已过期」) */
 export function expireMedia(limit = 500) {
+  const ts = now();
+  const maxCreatedAt = ts - MEDIA_TTL_MS;
   const rows = db
     .prepare(
       `SELECT * FROM task_media
-        WHERE deleted_at IS NULL AND expires_at <= ?
+        WHERE deleted_at IS NULL AND (expires_at <= ? OR created_at <= ?)
         ORDER BY expires_at LIMIT ?`
     )
-    .all(now(), limit);
+    .all(ts, maxCreatedAt, limit);
   if (rows.length === 0) return [];
   const mark = db.prepare('UPDATE task_media SET deleted_at = ? WHERE room_code = ? AND id = ?');
-  const ts = now();
+  const deletedAt = now();
   for (const r of rows) {
     removeMediaFile(r.media_path);
-    mark.run(ts, r.room_code, r.id);
-    r.deleted_at = ts;
+    mark.run(deletedAt, r.room_code, r.id);
+    r.deleted_at = deletedAt;
   }
   return rows;
 }

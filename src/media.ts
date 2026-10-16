@@ -80,13 +80,38 @@ function fileNameOf(media: TaskMedia): string {
   return `${media.id}${mediaExt(media.mime, media.name)}`;
 }
 
+/** 文件必须非空;服务端给了准确大小时还要完全一致,否则删掉损坏/未下完的副本 */
+function validLocalFile(file: File, media: TaskMedia): string | null {
+  if (!file.exists || file.size <= 0) return null;
+  if (media.size > 0 && file.size !== media.size) {
+    try {
+      file.delete();
+    } catch {
+      /* 下次重试仍会覆盖 */
+    }
+    return null;
+  }
+  return file.uri;
+}
+
 /** 本机是否已有这份附件;没有则返回 null(同步,不发起下载) */
 export function localMediaUri(media: TaskMedia): string | null {
-  if (known.has(media.id)) return known.get(media.id) ?? null;
+  const remembered = known.get(media.id);
+  if (remembered) {
+    try {
+      const valid = validLocalFile(new File(remembered), media);
+      known.set(media.id, valid);
+      return valid;
+    } catch {
+      known.set(media.id, null);
+      return null;
+    }
+  }
+  if (known.has(media.id)) return null;
+
   let uri: string | null = null;
   try {
-    const f = new File(cacheDir(), fileNameOf(media));
-    uri = f.exists && f.size > 0 ? f.uri : null;
+    uri = validLocalFile(new File(cacheDir(), fileNameOf(media)), media);
   } catch {
     uri = null;
   }
@@ -121,8 +146,10 @@ export function downloadMedia(server: string, media: TaskMedia): Promise<string>
     const file = await File.downloadFileAsync(`${normalizeServer(server)}${media.url}`, dest, {
       idempotent: true,
     });
-    known.set(media.id, file.uri);
-    return file.uri;
+    const local = validLocalFile(file, media);
+    if (!local) throw new Error('附件下载不完整,请重试');
+    known.set(media.id, local);
+    return local;
   }).finally(() => {
     inflight.delete(media.id);
   });
@@ -153,8 +180,10 @@ export async function importLocalFile(uri: string, media: TaskMedia): Promise<vo
   try {
     const dir = ensureCacheDir();
     const dest = new File(dir, fileNameOf(media));
-    await new File(uri).copy(dest);
-    known.set(media.id, dest.uri);
+    await new File(uri).copy(dest, { overwrite: true });
+    known.delete(media.id);
+    const local = validLocalFile(dest, media);
+    if (local) known.set(media.id, local);
   } catch {
     /* 拷贝失败不影响上传结果 */
   }

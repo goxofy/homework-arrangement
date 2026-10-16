@@ -73,7 +73,7 @@ export function formatTime(ts: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** 儿童端只允许查看 今天(含)以前的日期 */
+/** 判断日期是否晚于今天(按 YYYY-MM-DD 字符串可安全比较) */
 export function isFuture(dateStr: string): boolean {
   return dateStr > todayStr();
 }

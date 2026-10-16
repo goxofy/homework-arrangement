@@ -8,6 +8,7 @@
 //   5. 校验:空内容 400、任务不存在 404
 //   6. 过期:超过保留期后文件被删、下载返回 410、列表里标 expired
 //   7. 级联:删除任务会把它的附件文件一起清掉
+//   8. 保留期:配置可缩短,但任何值都不会超过 7 天
 //
 // 跑法:cd server && node test-media.mjs
 import { spawn } from 'node:child_process';
@@ -16,6 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { resolveMediaTtlDays } from './src/util.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 8898;
@@ -99,6 +101,11 @@ function connect() {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 /** 假装是一张图片的字节(内容不重要,服务端只按 mime 归类) */
 const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+
+check('附件保留期默认 7 天', resolveMediaTtlDays(undefined) === 7);
+check('附件保留期可以缩短', resolveMediaTtlDays(3) === 3);
+check('附件保留期绝不超过 7 天', resolveMediaTtlDays(30) === 7);
+check('非法附件保留期回落到 7 天', resolveMediaTtlDays('not-a-number') === 7);
 
 try {
   if (!(await waitUp())) throw new Error('服务器未能启动');
@@ -197,6 +204,14 @@ try {
 
   // ---------- 6. 过期自动清理 ----------
   await wait(2200); // 等过保留期(测试里设成 2 秒)
+  list = (await req('GET', `/api/rooms/${ROOM}/tasks/${DATE}`)).data;
+  const expiredBeforeSweep = (list[0]?.media ?? [])[0];
+  check(
+    '一到 expires_at 列表就标记 expired,不等待定时清理',
+    expiredBeforeSweep?.expired === true,
+    JSON.stringify(expiredBeforeSweep)
+  );
+
   const afterExpiry = await fetch(`${BASE}${imgUrl}`);
   check('过期后下载返回 410', afterExpiry.status === 410, `实际 ${afterExpiry.status}`);
   const expiryBody = await afterExpiry.json().catch(() => null);
@@ -205,7 +220,7 @@ try {
 
   list = (await req('GET', `/api/rooms/${ROOM}/tasks/${DATE}`)).data;
   const expiredMedia = (list[0]?.media ?? [])[0];
-  check('列表里标记 expired = true(前端好显示「已过期」)', expiredMedia?.expired === true, JSON.stringify(expiredMedia));
+  check('清理后列表仍保留 expired = true', expiredMedia?.expired === true, JSON.stringify(expiredMedia));
 
   const stats = (await req('GET', '/api/stats')).data;
   check('stats 显示过期附件数量', stats?.expired_media >= 1, JSON.stringify(stats));

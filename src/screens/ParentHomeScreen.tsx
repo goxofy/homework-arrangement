@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AttachmentBadges,
   AttachButtons,
+  MAX_ATTACHMENTS_PER_TASK,
   PendingAttachmentList,
   resetUploadStaging,
   type PendingAttachment,
@@ -166,7 +167,7 @@ export default function ParentHomeScreen({
               <Text style={[s.topBtnText, { fontSize: fs(14) }]}>设置</Text>
             </Pressable>
           </View>
-          {/* 周导航:家长端也能翻阅历史(和儿童端一致,不能翻到未来) */}
+          {/* 周导航:家长和儿童都能查看历史与未来日期 */}
           <WeekNav date={date} onChange={changeDate} marks={(d) => (tasksByDate[d]?.length ?? 0) > 0} />
         </View>
       </View>
@@ -429,6 +430,13 @@ export function AddTaskModal({
   // 关闭时一定要停掉麦克风,否则会一直占用录音
   React.useEffect(() => () => speech.cancel(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const close = () => {
+    if (busy) return;
+    resetUploadStaging();
+    if (speech.recognizing) speech.cancel();
+    onClose();
+  };
+
   const canSubmit = !!subjectId && content.trim().length > 0 && !busy;
   const submit = async () => {
     setBusy(true);
@@ -450,14 +458,14 @@ export function AddTaskModal({
     // 常驻渲染 + visible:关闭时先播退场动画,所以这里不能提前 return null
     <Overlay
       visible={visible}
-      onRequestClose={onClose}
+      onRequestClose={close}
       bar={
         // 保存放在顶部栏:键盘弹起时也一定点得到(底部按钮可能被键盘盖住)
         // flat:与首页同色,避免顶部白条和下面浅灰内容之间出现割裂的色带
         <TopBar
           flat
           title={`${title} · ${displayDate(date)}`}
-          left={<TopBarAction title="取消" tone="sub" onPress={onClose} />}
+          left={<TopBarAction title="取消" tone="sub" onPress={close} disabled={busy} />}
           right={<TopBarAction title="保存" onPress={submit} disabled={!canSubmit} />}
         />
       }>
@@ -499,10 +507,13 @@ export function AddTaskModal({
 
           {allowVoice && (
             <>
-              <Text style={[s.label, { fontSize: fs(14) }]}>附图 / 录音 / 文件(可选)</Text>
+              <Text style={[s.label, { fontSize: fs(14) }]}>图片 / 录音 / 文件(可选)</Text>
               <AttachButtons
                 disabled={busy}
-                onItems={(items) => setAttachments((prev) => [...prev, ...items])}
+                remainingSlots={MAX_ATTACHMENTS_PER_TASK - attachments.length}
+                onItems={(items) =>
+                  setAttachments((prev) => [...prev, ...items].slice(0, MAX_ATTACHMENTS_PER_TASK))
+                }
               />
               <PendingAttachmentList
                 items={attachments}
@@ -511,8 +522,8 @@ export function AddTaskModal({
               />
               {attachments.length > 0 && (
                 <Text style={[s.hint, { fontSize: fs(11) }]}>
-                  附件会上传到你的服务器暂存(默认 7 天);孩子在有效期内打开这一天,就会自动下载到 iPad
-                  上长期保存。
+                  附件会上传到你的服务器暂存(最多 7 天);孩子在有效期内打开这一天,就会自动下载到 iPad
+                  上长期保存。新增上传暂不支持视频。
                 </Text>
               )}
             </>

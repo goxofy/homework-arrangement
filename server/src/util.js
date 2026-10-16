@@ -24,11 +24,22 @@ export const MEDIA_KINDS = ['image', 'audio', 'video', 'file'];
 /** 单条作业最多挂多少个附件 */
 export const MEDIA_MAX_PER_TASK = 20;
 
+/** 附件在服务器上的最长保留天数,任何部署配置都不能超过它 */
+export const MEDIA_TTL_MAX_DAYS = 7;
+
 /**
- * 附件在服务器上的保留时长(默认 7 天,可用环境变量 MEDIA_TTL_DAYS 覆盖)。
- * 允许小数(测试/自建服务器想改成 0.5 天也可以),非正数则回落到 7 天。
+ * 解析附件保留期。允许用小数缩短保留期以便测试,无效值回落到 7 天,
+ * 大于 7 的配置自动钳制,避免误配置成长期存储。
+ * @param {unknown} value
+ * @returns {number}
  */
-export const MEDIA_TTL_DAYS = Number(process.env.MEDIA_TTL_DAYS) > 0 ? Number(process.env.MEDIA_TTL_DAYS) : 7;
+export function resolveMediaTtlDays(value) {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return MEDIA_TTL_MAX_DAYS;
+  return Math.min(requested, MEDIA_TTL_MAX_DAYS);
+}
+
+export const MEDIA_TTL_DAYS = resolveMediaTtlDays(process.env.MEDIA_TTL_DAYS);
 export const MEDIA_TTL_MS = MEDIA_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 /** 保留期的人类可读写法,用于日志与错误提示 */

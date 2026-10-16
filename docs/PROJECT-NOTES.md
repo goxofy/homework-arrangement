@@ -53,7 +53,7 @@
   ├─ 打字/语音布置今天的作业        →     ├─ 打开就是今天,大字看
   ├─ 配图/录音/视频当资料(7 天暂存) →     ├─ 翻到这一天自动下载到本机
   ├─ 勾选完成                       ↔     ├─ 自己也能勾选完成
-  └─ 回看上周/下周(不能翻未来)       ←→    └─ 同一套周导航,行为一致
+  └─ 提前布置未来日期作业             ←→    └─ 同一套周导航,可提前查看
              │                                    │
              └────────── 自建服务端(家里/公网)──────┘
                 REST + WebSocket 实时双向同步
@@ -76,7 +76,7 @@
 | 教科书面每天固定几科 | **分组持续生效**:分组配置一次,后续每天沿用,全 App 只有一个分组入口 |
 | 要用很多年 | 数据落在**自己家的服务器**,不依赖任何云服务账号与付费 |
 | 家里的服务器很弱(树莓派级) | 服务端零原生依赖、SQLite 单文件、附件串行上传、下载并发上限 2 |
-| 孩子可能会往前翻 | 两端都**不能翻到未来日期**;儿童端可回查历史 |
+| 需要提前安排周末/下周 | 两端都可浏览未来日期;家长可提前布置,儿童可提前查看 |
 | 视力差异大 | 设置页提供**字号 4 档 + 行距 3 档**,只影响本机显示 |
 
 ### 2.2 关键设计决策与理由
@@ -109,7 +109,7 @@
 |---|---|
 | `expo-speech-recognition` | 语音转文字(iOS `SFSpeechRecognizer` / Android `SpeechRecognizer`) |
 | `expo-audio` | 录音(语音讲解附件) |
-| `expo-image-picker` | 相册多选图片/视频 |
+| `expo-image-picker` | 相册多选图片(历史视频附件保留展示兼容) |
 | `expo-video` | 播放视频附件 |
 | `expo-file-system` | 附件原生上传(`File.upload`)、本机缓存(`Directory`/`File`/`Paths`) |
 | `@react-native-async-storage/async-storage` | 身份、服务器地址、显示偏好、草稿持久化 |
@@ -384,7 +384,7 @@ task_media  (room_code, id, task_id, kind,                  -- image|audio|video
 
 绝不用 UTC 或 `Date.toISOString()` 截取日期 —— 东八区下会把"今天"算成"昨天"。
 `src/dates.ts` 提供 `todayStr / localDateStr / addDays / startOfWeek / weekRangeLabel / isFuture` 等,
-一律基于**本地时区**;`isFuture()` 是两端"不能翻到未来"的统一依据。服务端 `isValidDate()` 还会用
+一律基于**本地时区**;未来日期不再被客户端导航拦截,`isFuture()` 仅作为通用日期判断工具。服务端 `isValidDate()` 还会用
 `new Date(s+'T00:00:00Z').toISOString().slice(0,10) === s` 反查,挡掉 `2026-02-31` 这类非法日期。
 
 ### 6.13 iOS 签名身份不能写死
@@ -763,20 +763,16 @@ ALTOOL=/Applications/Transporter.app/Contents/Frameworks/ContentDeliveryServices
 | 遗留 | build 3 已在 App Store Connect 里(上传 4 之后可删掉,避免自己装错版本) |
 | 工作流状态 | 三条工作流全绿;`IOS_BUILD_OFFSET=1` |
 
-### 11.2 未提交的工作区改动(**重要**)
+### 11.2 附件功能的版本保护
 
-**作业资料(附件)功能的绝大部分仍未提交** —— `git log -- src/MediaAttachments.tsx src/media.ts` 为空,
-说明这两个文件从未进过任何提交;README 里描述附件功能的段落也在未提交的改动里。
+作业资料功能已在保护性提交中进入 Git,并推送到独立功能分支;不会再因为清理未跟踪文件而丢失。
+后续图片附件加固和未来日期改动应继续在功能分支验证后再合并,不要直接覆盖线上 `main`。
 
-```
-17 files changed, 979 insertions(+), 185 deletions(-)   (git diff --stat)
-修改:App.tsx / README.md / app.json / bun.lock / package.json
-     server/README.md / server/src/db.js(+170) / server/src/index.js(+180) / server/src/util.js(+88)
-     src/AppContext.tsx(+103) / src/TaskDetail.tsx / src/api.ts / src/screens/*(3) / src/storage.ts / src/ui.tsx
-新增(未跟踪):src/MediaAttachments.tsx(809 行) / src/media.ts / src/media-viewer.tsx / server/test-media.mjs
-```
+当前产品约定:
 
-**这意味着**:如果哪天误跑 `git checkout .`,附件功能会全部丢失。建议尽快提交(或至少 `git stash` 到别处)。
+- 新增附件支持图片、录音和普通文件;视频保留历史数据展示兼容,暂不新增上传。
+- 服务端附件默认保留 7 天,配置只能缩短,不能超过 7 天。
+- 客户端缓存下载文件会校验大小,避免把不完整文件当成有效副本。
 
 ### 11.3 验证手段(可复跑)
 

@@ -1,4 +1,4 @@
-// 儿童端首页(iPad 为主):当日作业大字显示、语音播放、历史日期回查(只读布置,但可勾选完成)。
+// 儿童端首页(iPad 为主):作业大字显示、语音播放、历史与未来日期查看(只读布置,但可勾选完成)。
 
 import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
