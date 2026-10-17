@@ -669,12 +669,16 @@ export function SyncToast({ visible, text }: { visible: boolean; text: string })
 const SHOW_DELAY_MS = 1200;
 
 export function ErrorBar({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const text = (
+    <Text style={styles.errorBarText}>
+      {message}
+      {onRetry ? ' · 点击重试' : ''}
+    </Text>
+  );
+  if (!onRetry) return <View style={styles.errorBar}>{text}</View>;
   return (
-    <Pressable onPress={onRetry} style={styles.errorBar}>
-      <Text style={styles.errorBarText}>
-        {message}
-        {onRetry ? '(点击重试)' : ''}
-      </Text>
+    <Pressable onPress={onRetry} style={styles.errorBar} accessibilityRole="button">
+      {text}
     </Pressable>
   );
 }
