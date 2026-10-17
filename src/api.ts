@@ -1,6 +1,7 @@
 // 客户端 API 封装:与自建服务端通信。
 
 import { File, UploadType } from 'expo-file-system';
+import { fetchTextWithTimeout, RequestTimeoutError } from './fetch-timeout';
 import type { Subject, Task, MediaKind } from './storage';
 import { normalizeServer } from './storage';
 
@@ -21,27 +22,45 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(server: string, path: string, init?: RequestInit): Promise<T> {
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const HEALTH_REQUEST_TIMEOUT_MS = 5000;
+
+async function request<T>(
+  server: string,
+  path: string,
+  init?: RequestInit,
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<T> {
   const base = normalizeServer(server);
-  let res: Response;
+  let response: Response;
+  let text: string;
   try {
-    res = await fetch(`${base}${path}`, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
-    });
-  } catch {
+    const result = await fetchTextWithTimeout(
+      `${base}${path}`,
+      {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+      },
+      timeoutMs
+    );
+    response = result.response;
+    text = result.text;
+  } catch (error) {
+    if (error instanceof RequestTimeoutError) {
+      throw new ApiError(0, `请求超时(${base}),请检查网络或服务器状态`);
+    }
     // 带上解析后的实际地址,方便在真机上定位问题(网络不通 / 地址写错 / 服务未启动)
     throw new ApiError(0, `无法连接服务器(${base}),请检查网络、服务器地址或服务是否已启动`);
   }
-  const text = await res.text();
+
   let data: any = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
     /* 非 JSON 响应 */
   }
-  if (!res.ok) {
-    throw new ApiError(res.status, data?.error || `请求失败(${res.status})`);
+  if (!response.ok) {
+    throw new ApiError(response.status, data?.error || `请求失败(${response.status})`);
   }
   return data as T;
 }
@@ -49,7 +68,7 @@ async function request<T>(server: string, path: string, init?: RequestInit): Pro
 export const api = {
   async health(server: string): Promise<boolean> {
     try {
-      await request<{ ok: boolean }>(server, '/api/health');
+      await request<{ ok: boolean }>(server, '/api/health', undefined, HEALTH_REQUEST_TIMEOUT_MS);
       return true;
     } catch {
       return false;

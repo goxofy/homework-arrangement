@@ -34,6 +34,14 @@ export interface UploadFailure {
 
 const WS_BACKOFF_MAX = 15000;
 
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : '加载失败,请稍后重试';
+}
+
+function identityKeyOf(identity: Pick<Identity, 'server' | 'roomCode'>): string {
+  return `${normalizeServer(identity.server)}\u0000${identity.roomCode}`;
+}
+
 interface AppContextValue {
   ready: boolean;
   identity: Identity | null;
@@ -41,6 +49,8 @@ interface AppContextValue {
   /** 按日期缓存的任务: date -> tasks */
   tasksByDate: Record<string, Task[]>;
   loadingDates: Record<string, boolean>;
+  /** 某日期最后一次加载失败的原因;成功后清空,已有任务不会因失败被删除 */
+  taskErrorsByDate: Record<string, string | null>;
   connected: boolean;
   saveIdentityAndJoin: (identity: Identity) => Promise<void>;
   updateIdentity: (patch: Partial<Identity>) => Promise<void>;
@@ -95,27 +105,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [tasksByDate, setTasksByDate] = useState<Record<string, Task[]>>({});
   const [loadingDates, setLoadingDates] = useState<Record<string, boolean>>({});
+  const [taskErrorsByDate, setTaskErrorsByDate] = useState<Record<string, string | null>>({});
   const [connected, setConnected] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(1000);
-  const closedRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectionGenerationRef = useRef(0);
+  const activeIdentityKeyRef = useRef('');
+  const taskRequestVersionRef = useRef<Record<string, number>>({});
   // 已请求过的日期集合,用 ref 保存以便 WebSocket 回调中拿到最新值
   const knownDatesRef = useRef<Set<string>>(new Set());
 
-  const fetchSubjects = useCallback(async (id: Identity) => {
+  const fetchSubjects = useCallback(async (id: Identity): Promise<void> => {
+    const identityKey = identityKeyOf(id);
+    if (activeIdentityKeyRef.current !== identityKey) return;
     const list = await api.listSubjects(id.server, id.roomCode);
-    setSubjects(list);
+    if (activeIdentityKeyRef.current === identityKey) setSubjects(list);
   }, []);
 
-  const fetchTasks = useCallback(async (id: Identity, date: string) => {
+  const fetchTasks = useCallback(async (id: Identity, date: string): Promise<void> => {
+    const identityKey = identityKeyOf(id);
+    if (activeIdentityKeyRef.current !== identityKey) return;
+    const requestVersion = (taskRequestVersionRef.current[date] ?? 0) + 1;
+    taskRequestVersionRef.current[date] = requestVersion;
+    const isCurrent = (): boolean =>
+      activeIdentityKeyRef.current === identityKey &&
+      taskRequestVersionRef.current[date] === requestVersion;
+
     knownDatesRef.current.add(date);
     setLoadingDates((m) => ({ ...m, [date]: true }));
+    setTaskErrorsByDate((m) => ({ ...m, [date]: null }));
     try {
       const list = await api.listTasks(id.server, id.roomCode, date);
-      setTasksByDate((m) => ({ ...m, [date]: list }));
+      if (isCurrent()) setTasksByDate((m) => ({ ...m, [date]: list }));
+    } catch (error) {
+      if (isCurrent()) {
+        setTaskErrorsByDate((m) => ({ ...m, [date]: messageOf(error) }));
+      }
+      throw error;
     } finally {
-      setLoadingDates((m) => ({ ...m, [date]: false }));
+      if (isCurrent()) setLoadingDates((m) => ({ ...m, [date]: false }));
     }
   }, []);
 
@@ -140,29 +170,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const id = await loadIdentity();
       if (id) {
+        activeIdentityKeyRef.current = identityKeyOf(id);
+        taskRequestVersionRef.current = {};
         setIdentity(id);
-        try {
-          await fetchSubjects(id);
-          await fetchTasks(id, todayStr());
+        const [, tasksResult] = await Promise.allSettled([
+          fetchSubjects(id),
+          fetchTasks(id, todayStr()),
+        ]);
+        if (tasksResult.status === 'fulfilled') {
           prefetchRecentDays(id); // 后台预取,不阻塞启动
-        } catch {
-          // 服务器暂时不可达也允许进入,界面会提示重试
         }
       }
       setReady(true);
     })();
   }, [fetchSubjects, fetchTasks, prefetchRecentDays]);
 
-  // WebSocket 同步
-  const connectWs = useCallback((id: Identity) => {
-    closedRef.current = false;
+  const clearReconnectTimer = useCallback((): void => {
+    if (reconnectTimerRef.current == null) return;
+    clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+  }, []);
+
+  // WebSocket 同步。generation 保证旧身份的 handler/timer 永远不能修改新连接。
+  const connectWs = useCallback((id: Identity, generation: number): void => {
     const base = normalizeServer(id.server).replace(/^http/, 'ws');
     const url = `${base}/ws?room=${encodeURIComponent(id.roomCode)}`;
+    const isCurrent = (): boolean => connectionGenerationRef.current === generation;
 
-    const open = () => {
+    const open = (): void => {
+      if (!isCurrent()) return;
+      clearReconnectTimer();
       const ws = new WebSocket(url);
+      if (!isCurrent()) {
+        ws.close();
+        return;
+      }
       wsRef.current = ws;
+
       ws.onopen = () => {
+        if (!isCurrent() || wsRef.current !== ws) {
+          ws.close();
+          return;
+        }
         backoffRef.current = 1000;
         setConnected(true);
         // 重连后全量刷新,防漏消息
@@ -170,6 +219,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         knownDatesRef.current.forEach((d) => fetchTasks(id, d).catch(() => {}));
       };
       ws.onmessage = (e) => {
+        if (!isCurrent() || wsRef.current !== ws) return;
         try {
           const msg = JSON.parse(String(e.data));
           if (msg.type === 'subjects_changed') {
@@ -188,38 +238,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       };
       ws.onclose = () => {
+        if (!isCurrent()) return;
+        if (wsRef.current === ws) wsRef.current = null;
         setConnected(false);
-        wsRef.current = null;
-        if (!closedRef.current && AppState.currentState !== 'unknown') {
-          const delay = backoffRef.current;
-          backoffRef.current = Math.min(backoffRef.current * 2, WS_BACKOFF_MAX);
-          setTimeout(() => {
-            if (!closedRef.current) open();
-          }, delay);
-        }
+        if (AppState.currentState === 'unknown') return;
+
+        const delay = backoffRef.current;
+        backoffRef.current = Math.min(backoffRef.current * 2, WS_BACKOFF_MAX);
+        reconnectTimerRef.current = setTimeout(() => {
+          reconnectTimerRef.current = null;
+          if (isCurrent()) open();
+        }, delay);
       };
       ws.onerror = () => ws.close();
     };
     open();
-  }, [fetchSubjects, fetchTasks]);
+  }, [clearReconnectTimer, fetchSubjects, fetchTasks]);
 
   // 身份变化时建立/断开 WebSocket
   useEffect(() => {
-    if (!identity) {
-      closedRef.current = true;
-      wsRef.current?.close();
-      wsRef.current = null;
-      setConnected(false);
-      return;
-    }
-    connectWs(identity);
+    const generation = connectionGenerationRef.current + 1;
+    connectionGenerationRef.current = generation;
+    clearReconnectTimer();
+    const previous = wsRef.current;
+    wsRef.current = null;
+    previous?.close();
+    setConnected(false);
+    backoffRef.current = 1000;
+
+    if (!identity) return;
+    connectWs(identity, generation);
     return () => {
-      closedRef.current = true;
-      wsRef.current?.close();
+      if (connectionGenerationRef.current === generation) {
+        connectionGenerationRef.current = generation + 1;
+      }
+      clearReconnectTimer();
+      const current = wsRef.current;
       wsRef.current = null;
+      current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity?.server, identity?.roomCode]);
+  }, [identity?.server, identity?.roomCode, clearReconnectTimer, connectWs]);
 
   // App 从后台回前台时刷新当前数据
   useEffect(() => {
@@ -274,12 +333,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const saveIdentityAndJoin = useCallback(async (id: Identity) => {
     await saveIdentity(id);
+    activeIdentityKeyRef.current = identityKeyOf(id);
+    taskRequestVersionRef.current = {};
     setIdentity(id);
     setTasksByDate({});
+    setLoadingDates({});
+    setTaskErrorsByDate({});
     knownDatesRef.current = new Set();
-    await fetchSubjects(id);
-    await fetchTasks(id, todayStr());
-    prefetchRecentDays(id);
+    const [, tasksResult] = await Promise.allSettled([
+      fetchSubjects(id),
+      fetchTasks(id, todayStr()),
+    ]);
+    if (tasksResult.status === 'fulfilled') prefetchRecentDays(id);
   }, [fetchSubjects, fetchTasks, prefetchRecentDays]);
 
   const updateIdentity = useCallback(
@@ -289,11 +354,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (patch.server) next.server = normalizeServer(patch.server);
       await saveIdentity(next);
       if (patch.server || patch.roomCode) {
+        activeIdentityKeyRef.current = identityKeyOf(next);
+        taskRequestVersionRef.current = {};
         setTasksByDate({});
+        setLoadingDates({});
+        setTaskErrorsByDate({});
         knownDatesRef.current = new Set();
-        await fetchSubjects(next).catch(() => {});
-        await fetchTasks(next, todayStr()).catch(() => {});
-        prefetchRecentDays(next);
+        const [, tasksResult] = await Promise.allSettled([
+          fetchSubjects(next),
+          fetchTasks(next, todayStr()),
+        ]);
+        if (tasksResult.status === 'fulfilled') prefetchRecentDays(next);
       }
       setIdentity(next);
     },
@@ -303,9 +374,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     await clearIdentity();
     await AsyncStorage.removeItem('@homework/draft');
+    activeIdentityKeyRef.current = '';
+    taskRequestVersionRef.current = {};
     setIdentity(null);
     setSubjects([]);
     setTasksByDate({});
+    setLoadingDates({});
+    setTaskErrorsByDate({});
+    knownDatesRef.current = new Set();
   }, []);
 
   const value = useMemo<AppContextValue>(
@@ -315,6 +391,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       subjects,
       tasksByDate,
       loadingDates,
+      taskErrorsByDate,
       connected,
       saveIdentityAndJoin,
       updateIdentity,
@@ -393,6 +470,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       subjects,
       tasksByDate,
       loadingDates,
+      taskErrorsByDate,
       connected,
       saveIdentityAndJoin,
       updateIdentity,

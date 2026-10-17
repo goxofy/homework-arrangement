@@ -3,7 +3,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Card, CONTENT_MAX_WIDTH, DoneCircle, Empty, GroupHeader, Screen, SyncToast, WeekNav } from '../ui';
+import { Card, CONTENT_MAX_WIDTH, DoneCircle, Empty, ErrorBar, GroupHeader, Screen, SyncToast, WeekNav } from '../ui';
 import { colors, spacing } from '../theme';
 import { useDisplay } from '../display';
 import { useApp } from '../AppContext';
@@ -11,7 +11,8 @@ import { displayDate, isToday, todayStr } from '../dates';
 import { TaskDetail } from '../TaskDetail';
 import { ensureMediaCached } from '../media';
 import { AttachmentBadges, AudioButton, AudioQuickPlay } from '../MediaAttachments';
-import type { Subject, Task } from '../storage';
+import { groupTasksBySubject } from '../task-groups';
+import type { Task } from '../storage';
 import SettingsScreen from './SettingsScreen';
 
 /** 内容超过这个长度就在任务行末尾显示一个「›」,提示可以点开看全文 */
@@ -23,6 +24,7 @@ export default function ChildHomeScreen() {
     subjects,
     tasksByDate,
     loadingDates,
+    taskErrorsByDate,
     connected,
     setTaskDone,
     refreshTasks,
@@ -46,6 +48,7 @@ export default function ChildHomeScreen() {
 
   const tasks = tasksByDate[date] ?? [];
   const loading = !!loadingDates[date];
+  const taskError = taskErrorsByDate[date];
   // 详情里的 task 跟着列表更新(附件下载完成后、另一台设备改了内容)
   const liveDetailTask = detailTask ? (tasks.find((t) => t.id === detailTask.id) ?? detailTask) : null;
 
@@ -67,24 +70,7 @@ export default function ChildHomeScreen() {
     if (all.length > 0) ensureMediaCached(server, all);
   }, [server, tasks]);
 
-  const grouped = useMemo(() => {
-    const map: { subject: Subject; tasks: Task[] }[] = [];
-    const active = subjects.filter((s) => !s.archived);
-    for (const s of active) {
-      const list = tasks.filter((t) => t.subject_id === s.id);
-      if (list.length > 0) map.push({ subject: s, tasks: list });
-    }
-    // 有任务但分组被归档的,挂在「其他」区域
-    const activeIds = new Set(active.map((s) => s.id));
-    const orphans = tasks.filter((t) => !activeIds.has(t.subject_id));
-    if (orphans.length > 0) {
-      map.push({
-        subject: { id: '__other', name: '其他', color: '#F59E0B', sort_order: 99, archived: 0 },
-        tasks: orphans,
-      });
-    }
-    return map;
-  }, [subjects, tasks]);
+  const grouped = useMemo(() => groupTasksBySubject(subjects, tasks), [subjects, tasks]);
 
   const total = tasks.length;
   const doneCount = tasks.filter((t) => t.done).length;
@@ -118,32 +104,44 @@ export default function ChildHomeScreen() {
 
       {/* 顶部栏已经让开了状态栏,这里只需要底部(无底部栏)和横屏左右 */}
       <Screen edges={['bottom', 'left', 'right']}>
+        {taskError && (
+          <ErrorBar
+            message={total > 0 ? `${taskError},当前显示上次内容` : taskError}
+            onRetry={() => refreshRef.current(date).catch(() => {})}
+          />
+        )}
         {loading && total === 0 ? (
           <Empty text="加载中…" />
-        ) : total === 0 ? (
+        ) : taskError && total === 0 ? null : total === 0 ? (
           <Card>
             <Empty text={isToday(date) ? '今天没有作业,尽情玩耍吧 🎉' : '这一天没有作业'} />
           </Card>
         ) : (
-          grouped.map(({ subject, tasks: list }) => (
-            <View key={subject.id} style={{ marginBottom: vs(12) }}>
-              <GroupHeader
-                name={subject.name}
-                color={subject.color}
-                count={list.length}
-                doneCount={list.filter((t) => t.done).length}
-              />
-              {list.map((t) => (
-                <ChildTaskCard
-                  key={t.id}
-                  task={t}
-                  server={server}
-                  onOpen={() => openDetail(t)}
-                  onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
+          grouped.map((group) => {
+            const list = group.tasks;
+            return (
+              <View key={group.id} style={{ marginBottom: vs(12) }}>
+                <GroupHeader
+                  name={group.name}
+                  color={group.color}
+                  count={list.length}
+                  doneCount={list.filter((t) => t.done).length}
+                  right={
+                    group.archived ? <Text style={[s.archivedTag, { fontSize: fs(11) }]}>已归档</Text> : undefined
+                  }
                 />
-              ))}
-            </View>
-          ))
+                {list.map((t) => (
+                  <ChildTaskCard
+                    key={t.id}
+                    task={t}
+                    server={server}
+                    onOpen={() => openDetail(t)}
+                    onToggle={() => setTaskDone(t.id, !t.done, date).catch(() => {})}
+                  />
+                ))}
+              </View>
+            );
+          })
         )}
         {total > 0 && (
           <Text style={[s.footerHint, { fontSize: fs(12) }]}>
@@ -262,5 +260,6 @@ const s = StyleSheet.create({
   },
   taskText: { fontSize: 17, color: colors.text },
   moreHint: { color: colors.textSub },
+  archivedTag: { color: colors.textSub, fontWeight: '600' },
   footerHint: { textAlign: 'center', color: colors.textSub, marginTop: spacing(1) },
 });

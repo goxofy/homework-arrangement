@@ -46,6 +46,9 @@ curl http://127.0.0.1:8787/api/health
 ## 三、方式 B:systemd 常驻(推荐生产)
 
 ```bash
+# 数据独立放在 /var/lib,升级代码时不会误删;运行用户必须有写权限
+sudo install -d -o www-data -g www-data -m 700 /var/lib/homework-server
+
 sudo tee /etc/systemd/system/homework-server.service > /dev/null <<'EOF'
 [Unit]
 Description=Homework App Sync Server
@@ -53,15 +56,17 @@ After=network.target
 
 [Service]
 Type=simple
-# 改成你的实际部署路径和运行用户
-WorkingDirectory=/opt/homework-arrangement/homework-app/server
+# 标准 clone 后 server 就在仓库根下;若部署位置不同请同步修改
+WorkingDirectory=/opt/homework-arrangement/server
 ExecStart=/usr/bin/node src/index.js
+Environment=NODE_ENV=production
 Environment=PORT=8787
-# 可选:自定义数据目录(默认 server/data)
-# Environment=DATA_DIR=/var/lib/homework-server
+Environment=DATA_DIR=/var/lib/homework-server
 Restart=always
 RestartSec=3
 User=www-data
+Group=www-data
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

@@ -17,6 +17,7 @@ import {
   CONTENT_MAX_WIDTH,
   DoneCircle,
   Empty,
+  ErrorBar,
   GroupHeader,
   Overlay,
   Screen,
@@ -30,6 +31,7 @@ import { useDisplay } from '../display';
 import { useApp } from '../AppContext';
 import { displayDate, formatTime, todayStr } from '../dates';
 import { TaskDetail } from '../TaskDetail';
+import { groupTasksBySubject } from '../task-groups';
 import type { Subject, Task, TaskMedia } from '../storage';
 import { useSpeechRecognition } from '../speech';
 
@@ -48,6 +50,7 @@ export default function ParentHomeScreen({
     subjects,
     tasksByDate,
     loadingDates,
+    taskErrorsByDate,
     connected,
     addTask,
     uploadTaskMedia,
@@ -79,6 +82,7 @@ export default function ParentHomeScreen({
   // 详情弹层里的 task 要跟着列表一起更新(补了附件、别处改了内容)
   const liveDetailTask = detailTask ? (tasks.find((t) => t.id === detailTask.id) ?? detailTask) : null;
   const loading = !!loadingDates[date];
+  const taskError = taskErrorsByDate[date];
   const doneCount = tasks.filter((t) => t.done).length;
 
   // 用 ref 拿最新的 refreshTasks,避免把它的身份写进依赖(它会随数据变化而变,否则会无限刷新)
@@ -92,18 +96,10 @@ export default function ParentHomeScreen({
 
   const activeSubjects = useMemo(() => subjects.filter((s) => !s.archived), [subjects]);
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, Task[]>();
-    for (const s of activeSubjects) map.set(s.id, []);
-    for (const t of tasks) {
-      const arr = map.get(t.subject_id);
-      if (arr) arr.push(t);
-      else map.set(t.subject_id, [t]);
-    }
-    return map;
-  }, [activeSubjects, tasks]);
+  const grouped = useMemo(() => groupTasksBySubject(subjects, tasks), [subjects, tasks]);
 
-  const subjectName = (sid: string) => subjects.find((s) => s.id === sid)?.name ?? '其他';
+  const subjectNameOf = (task: Task) =>
+    subjects.find((subject) => subject.id === task.subject_id)?.name ?? task.subject_name ?? '其他';
 
   const openAdd = () => {
     setPresetSubjectId(null);
@@ -174,25 +170,33 @@ export default function ParentHomeScreen({
 
       {/* 顶部/底部栏已经各自让开了状态栏和手势条 */}
       <Screen edges={['left', 'right']}>
+        {taskError && (
+          <ErrorBar
+            message={tasks.length > 0 ? `${taskError},当前显示上次内容` : taskError}
+            onRetry={() => refreshRef.current(date).catch(() => {})}
+          />
+        )}
         {loading && tasks.length === 0 ? (
           <Empty text="加载中…" />
-        ) : tasks.length === 0 ? (
+        ) : taskError && tasks.length === 0 ? null : tasks.length === 0 ? (
           <Card>
             <Empty
               text={isTodayDate ? '今天还没有布置作业 🎈 点下方按钮添加' : `${displayDate(date)} 没有作业`}
             />
           </Card>
         ) : (
-          activeSubjects.map((sub) => {
-            const list = grouped.get(sub.id) ?? [];
-            if (list.length === 0) return null;
+          grouped.map((group) => {
+            const list = group.tasks;
             return (
-              <View key={sub.id} style={{ marginBottom: vs(12) }}>
+              <View key={group.id} style={{ marginBottom: vs(12) }}>
                 <GroupHeader
-                  name={sub.name}
-                  color={sub.color}
+                  name={group.name}
+                  color={group.color}
                   count={list.length}
                   doneCount={list.filter((t) => t.done).length}
+                  right={
+                    group.archived ? <Text style={[s.archivedTag, { fontSize: fs(11) }]}>已归档</Text> : undefined
+                  }
                 />
                 {list.map((t) => (
                   <TaskRow
@@ -284,7 +288,7 @@ export default function ParentHomeScreen({
         <TaskDetail
           task={liveDetailTask}
           visible={detailOpen}
-          subjectName={subjectName(liveDetailTask.subject_id)}
+          subjectName={subjectNameOf(liveDetailTask)}
           subjectColor={liveDetailTask.subject_color}
           date={date}
           server={identity?.server ?? ''}
@@ -608,6 +612,7 @@ const s = StyleSheet.create({
   taskActions: { flexDirection: 'row', alignItems: 'center', gap: spacing(0.9) },
   editBtn: { color: colors.primary, fontSize: 13, fontWeight: '600' },
   delBtn: { color: colors.danger, fontSize: 13, fontWeight: '600' },
+  archivedTag: { color: colors.textSub, fontWeight: '600' },
   totalHint: { textAlign: 'center', color: colors.textSub, marginTop: spacing(1) },
   bottomBar: {
     paddingTop: spacing(2),
