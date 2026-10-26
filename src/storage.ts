@@ -63,7 +63,8 @@ const KEY_DISPLAY = '@homework/display';
 const KEY_IDENTITY = '@homework/identity';
 const KEY_ONBOARDED = '@homework/onboarded';
 const KEY_SERVER_HINT = '@homework/server-hint'; // 欢迎页预填的服务器地址
-export const KEY_DRAFT = '@homework/draft'; // 家长端语音/文本暂存
+const KEY_LAST_SUBJECTS = '@homework/last-subjects'; // server + room -> 上次成功新增作业的分组
+export const KEY_DRAFT = '@homework/draft'; // 家长端文本暂存
 
 export async function loadIdentity(): Promise<Identity | null> {
   try {
@@ -133,6 +134,52 @@ export async function loadServerHint(): Promise<string> {
 export async function saveServerHint(server: string): Promise<void> {
   try {
     await AsyncStorage.setItem(KEY_SERVER_HINT, server);
+  } catch {
+    /* 存不上也不影响主流程 */
+  }
+}
+
+function lastSubjectKey(identity: Pick<Identity, 'server' | 'roomCode'>): string {
+  return `${normalizeServer(identity.server)}\u0000${identity.roomCode}`;
+}
+
+function parseLastSubjectMap(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string' && value) result[key] = value;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+/** 读取某台服务器、某个房间上次成功新增作业时使用的分组 */
+export async function loadLastSubjectId(
+  identity: Pick<Identity, 'server' | 'roomCode'>
+): Promise<string | null> {
+  try {
+    const map = parseLastSubjectMap(await AsyncStorage.getItem(KEY_LAST_SUBJECTS));
+    return map[lastSubjectKey(identity)] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 记录某台服务器、某个房间上次成功新增作业时使用的分组 */
+export async function saveLastSubjectId(
+  identity: Pick<Identity, 'server' | 'roomCode'>,
+  subjectId: string
+): Promise<void> {
+  if (!subjectId) return;
+  try {
+    const map = parseLastSubjectMap(await AsyncStorage.getItem(KEY_LAST_SUBJECTS));
+    map[lastSubjectKey(identity)] = subjectId;
+    await AsyncStorage.setItem(KEY_LAST_SUBJECTS, JSON.stringify(map));
   } catch {
     /* 存不上也不影响主流程 */
   }

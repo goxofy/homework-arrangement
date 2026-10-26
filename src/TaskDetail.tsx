@@ -99,7 +99,7 @@ export function TaskDetail({
           </Text>
         </Card>
 
-        {/* 老版「一条作业一段短语音」(说话转文字录下来的)仍然可以播 */}
+        {/* 兼容老版本「一条作业一段短语音」数据,历史附件仍然可以播放 */}
         {task.has_audio && task.audio_url && server ? (
           <Card style={{ marginTop: spacing(1.5) }}>
             <AudioRow uri={`${server}${task.audio_url}`} label="播放家长录的语音" />

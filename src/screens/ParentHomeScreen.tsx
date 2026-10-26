@@ -1,4 +1,4 @@
-// 家长端首页:按分组展示某一天的作业(可翻阅历史日期)+ 添加/编辑任务(文字为主,语音辅助)+ 分组配置入口。
+// 家长端首页:按分组展示某一天的作业(可翻阅历史日期)+ 添加/编辑任务 + 分组配置入口。
 
 import React, { useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -32,8 +32,7 @@ import { useApp } from '../AppContext';
 import { displayDate, formatTime, todayStr } from '../dates';
 import { TaskDetail } from '../TaskDetail';
 import { groupTasksBySubject } from '../task-groups';
-import type { Subject, Task, TaskMedia } from '../storage';
-import { useSpeechRecognition } from '../speech';
+import { loadLastSubjectId, saveLastSubjectId, type Subject, type Task, type TaskMedia } from '../storage';
 
 /** 内容超过这个长度就在任务行末尾显示一个「›」,提示可以点开看全文 */
 const LONG_CONTENT_HINT = 18;
@@ -58,22 +57,24 @@ export default function ParentHomeScreen({
     editTask,
     removeTask,
     setTaskDone,
+    refreshSubjects,
     refreshTasks,
   } = useApp();
   const insets = useSafeAreaInsets();
-  const { fs, vs, lh } = useDisplay();
+  const { fs, vs } = useDisplay();
 
   const [date, setDate] = useState(todayStr());
   const [addOpen, setAddOpen] = useState(false);
-  const [presetSubjectId, setPresetSubjectId] = useState<string | null>(null);
+  const [lastSubjectId, setLastSubjectId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Task | null>(null);
   // 详情弹层:task 留着不置空,这样关闭时退场动画期间内容还在,不会闪空
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   // 详情里补传附件时的进行状态
   const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const openDetail = (t: Task) => {
+  const openDetail = (t: Task): void => {
     setDetailTask(t);
     setDetailOpen(true);
   };
@@ -89,20 +90,48 @@ export default function ParentHomeScreen({
   const refreshRef = useRef(refreshTasks);
   refreshRef.current = refreshTasks;
 
-  const changeDate = (next: string) => {
+  const changeDate = (next: string): void => {
     setDate(next);
     refreshRef.current(next).catch(() => {});
   };
 
+  const forceRefresh = async (): Promise<void> => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.allSettled([refreshSubjects(), refreshRef.current(date)]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const activeSubjects = useMemo(() => subjects.filter((s) => !s.archived), [subjects]);
+
+  React.useEffect(() => {
+    let alive = true;
+    setLastSubjectId(null);
+    if (!identity) return () => { alive = false; };
+    loadLastSubjectId(identity).then((subjectId) => {
+      if (alive) setLastSubjectId(subjectId);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [identity?.server, identity?.roomCode]);
+
+  const defaultSubjectId = useMemo(() => {
+    if (lastSubjectId && activeSubjects.some((subject) => subject.id === lastSubjectId)) {
+      return lastSubjectId;
+    }
+    return activeSubjects[0]?.id ?? null;
+  }, [activeSubjects, lastSubjectId]);
 
   const grouped = useMemo(() => groupTasksBySubject(subjects, tasks), [subjects, tasks]);
 
   const subjectNameOf = (task: Task) =>
     subjects.find((subject) => subject.id === task.subject_id)?.name ?? task.subject_name ?? '其他';
 
-  const openAdd = () => {
-    setPresetSubjectId(null);
+  const openAdd = (): void => {
     setAddOpen(true);
   };
 
@@ -169,7 +198,7 @@ export default function ParentHomeScreen({
       </View>
 
       {/* 顶部/底部栏已经各自让开了状态栏和手势条 */}
-      <Screen edges={['left', 'right']}>
+      <Screen edges={['left', 'right']} refreshing={refreshing} onRefresh={forceRefresh}>
         {taskError && (
           <ErrorBar
             message={tasks.length > 0 ? `${taskError},当前显示上次内容` : taskError}
@@ -243,15 +272,17 @@ export default function ParentHomeScreen({
         <Button title="＋ 添加作业" onPress={() => openAdd()} style={{ flex: 1 }} />
       </View>
 
-      {/* 添加作业弹层:文字输入为主,可选语音转写辅助 + 附图/录音/文件 */}
+      {/* 添加作业弹层:文字输入 + 可选图片/录音/文件 */}
       <AddTaskModal
         visible={addOpen}
         subjects={activeSubjects}
         date={date}
-        initial={presetSubjectId ? { subject_id: presetSubjectId, content: '' } : undefined}
+        initial={defaultSubjectId ? { subject_id: defaultSubjectId, content: '' } : undefined}
         onClose={() => setAddOpen(false)}
         onSubmit={async (payload, onProgress) => {
           const { failed } = await addTask(payload, onProgress);
+          setLastSubjectId(payload.subject_id);
+          if (identity) saveLastSubjectId(identity, payload.subject_id).catch(() => {});
           resetUploadStaging();
           setAddOpen(false);
           if (failed.length > 0) {
@@ -269,7 +300,7 @@ export default function ParentHomeScreen({
         subjects={activeSubjects}
         date={date}
         title="编辑作业"
-        allowVoice={false}
+        allowAttachments={false}
         initial={editing ? { subject_id: editing.subject_id, content: editing.content } : undefined}
         onClose={() => setEditing(null)}
         onSubmit={async (payload) => {
@@ -367,18 +398,14 @@ export function TaskRow({
   );
 }
 
-/**
- * 添加/编辑作业弹层:
- * - 文字输入是主入口,始终可编辑
- * - 语音是辅助:点麦克风开始识别,识别出的文字会追加到输入框,可继续手动修改
- */
+/** 添加/编辑作业弹层:文字输入始终可编辑,新增作业时还可选图片、录音和文件。 */
 export function AddTaskModal({
   visible,
   subjects,
   date,
   initial,
   title = '添加作业',
-  allowVoice = true,
+  allowAttachments = true,
   onClose,
   onSubmit,
 }: {
@@ -387,14 +414,14 @@ export function AddTaskModal({
   date: string;
   initial?: { subject_id: string; content: string };
   title?: string;
-  allowVoice?: boolean;
+  allowAttachments?: boolean;
   onClose: () => void;
   onSubmit: (
     payload: { date: string; subject_id: string; content: string; files: PendingAttachment[] },
     onProgress: (index: number, total: number, name: string) => void
   ) => Promise<void>;
 }) {
-  const { fs, lh } = useDisplay();
+  const { fs } = useDisplay();
   const [subjectId, setSubjectId] = useState<string>(initial?.subject_id || subjects[0]?.id || '');
   const [content, setContent] = useState(initial?.content ?? '');
   // 附图/录音/文件:选好先列在这里,保存时跟着作业一起上传
@@ -402,15 +429,6 @@ export function AddTaskModal({
   const [uploading, setUploading] = useState<{ index: number; total: number; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 本次识别开始前的已有文字,最终转写会追加在它后面
-  const baseContentRef = useRef('');
-
-  const speech = useSpeechRecognition({
-    onFinal: (t) => {
-      // 只用「已有文字 + 本次转写」覆盖,避免覆盖用户中途的手动编辑
-      setContent(((baseContentRef.current + ' ' + t).trim()) || t);
-    },
-  });
 
   React.useEffect(() => {
     if (visible) {
@@ -419,25 +437,12 @@ export function AddTaskModal({
       setAttachments([]);
       setUploading(null);
       setError(null);
-      baseContentRef.current = initial?.content ?? '';
-    } else if (speech.recognizing) {
-      speech.cancel();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, subjects.length, initial?.subject_id, initial?.content]);
 
-  const startSpeech = () => {
-    baseContentRef.current = content;
-    speech.start().catch(() => {});
-  };
-
-  // 关闭时一定要停掉麦克风,否则会一直占用录音
-  React.useEffect(() => () => speech.cancel(), []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const close = () => {
+  const close = (): void => {
     if (busy) return;
     resetUploadStaging();
-    if (speech.recognizing) speech.cancel();
     onClose();
   };
 
@@ -447,7 +452,7 @@ export function AddTaskModal({
     setError(null);
     try {
       await onSubmit(
-        { date, subject_id: subjectId, content: content.trim(), files: allowVoice ? attachments : [] },
+        { date, subject_id: subjectId, content: content.trim(), files: allowAttachments ? attachments : [] },
         (index, total, name) => setUploading({ index, total, name })
       );
     } catch (e) {
@@ -483,6 +488,8 @@ export function AddTaskModal({
                 <Pressable
                   key={sub.id}
                   onPress={() => setSubjectId(sub.id)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
                   style={[
                     s.chip,
                     active && {
@@ -490,7 +497,7 @@ export function AddTaskModal({
                       borderColor: sub.color ?? colors.primary,
                     },
                   ]}>
-                  <Text style={[s.chipText, { fontSize: fs(14) }, active && { color: '#fff' }]}>
+                  <Text style={[s.chipText, { fontSize: fs(16) }, active && { color: '#fff' }]}>
                     {sub.name}
                   </Text>
                 </Pressable>
@@ -509,7 +516,7 @@ export function AddTaskModal({
             placeholderTextColor={colors.textSub}
           />
 
-          {allowVoice && (
+          {allowAttachments && (
             <>
               <Text style={[s.label, { fontSize: fs(14) }]}>图片 / 录音 / 文件(可选)</Text>
               <AttachButtons
@@ -533,29 +540,6 @@ export function AddTaskModal({
             </>
           )}
 
-          {allowVoice && (
-            <View style={s.voiceBox}>
-              {speech.recognizing ? (
-                <>
-                  <Text style={[s.voiceHint, { fontSize: fs(13) }]}>
-                    🎙️ 正在聆听…说完点「完成」,文字会追加到上面输入框
-                  </Text>
-                  {!!speech.transcript && (
-                    <Text style={[s.voiceLive, { fontSize: fs(14), lineHeight: lh(14) }]}>
-                      {speech.transcript}
-                    </Text>
-                  )}
-                  <Button title="完成" variant="soft" small onPress={speech.stop} style={{ alignSelf: 'center' }} />
-                </>
-              ) : (
-                <Button title="🎤 说话转文字(可选)" variant="soft" onPress={startSpeech} />
-              )}
-              {speech.error && <Text style={s.error}>{speech.error}</Text>}
-              <Text style={[s.hint, { fontSize: fs(12) }]}>
-                直接打字即可;语音只是辅助,识别结果保存前可任意修改。
-              </Text>
-            </View>
-          )}
 
           {error && <Text style={s.error}>{error}</Text>}
           {busy && (
@@ -623,25 +607,20 @@ const s = StyleSheet.create({
   label: { fontSize: 14, fontWeight: '600', color: colors.text },
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing(1) },
   chip: {
-    borderRadius: 999,
+    flexGrow: 1,
+    flexBasis: 112,
+    maxWidth: 180,
+    minHeight: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
     borderWidth: 1.5,
     borderColor: colors.border,
-    paddingHorizontal: spacing(1.5),
-    paddingVertical: spacing(0.7),
+    paddingHorizontal: spacing(2.5),
+    paddingVertical: spacing(1.25),
     backgroundColor: colors.card,
   },
-  chipText: { fontSize: 14, color: colors.text, fontWeight: '600' },
-  voiceBox: { gap: spacing(1.2), alignItems: 'stretch' },
-  voiceHint: { textAlign: 'center', color: colors.textSub, fontSize: 13 },
-  voiceLive: {
-    textAlign: 'center',
-    color: colors.primaryDark,
-    fontSize: 14,
-    lineHeight: 20,
-    backgroundColor: colors.primarySoft,
-    borderRadius: 10,
-    padding: spacing(1),
-  },
+  chipText: { fontSize: 16, color: colors.text, fontWeight: '700' },
   input: {
     borderWidth: 1.5,
     borderColor: colors.border,
