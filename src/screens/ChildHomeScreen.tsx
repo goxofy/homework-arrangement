@@ -27,6 +27,7 @@ export default function ChildHomeScreen() {
     taskErrorsByDate,
     connected,
     setTaskDone,
+    refreshSubjects,
     refreshTasks,
     updateIdentity,
     signOut,
@@ -40,8 +41,9 @@ export default function ChildHomeScreen() {
   // 详情弹层:task 留着不置空,这样关闭时退场动画期间内容还在,不会闪空
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const openDetail = (t: Task) => {
+  const openDetail = (t: Task): void => {
     setDetailTask(t);
     setDetailOpen(true);
   };
@@ -56,9 +58,19 @@ export default function ChildHomeScreen() {
   const refreshRef = useRef(refreshTasks);
   refreshRef.current = refreshTasks;
 
-  const changeDate = (next: string) => {
+  const changeDate = (next: string): void => {
     setDate(next);
     refreshRef.current(next).catch(() => {});
+  };
+
+  const forceRefresh = async (): Promise<void> => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.allSettled([refreshSubjects(), refreshRef.current(date)]);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // 只要孩子翻到这一天,就把这天的附件都下载到本机。
@@ -103,7 +115,10 @@ export default function ChildHomeScreen() {
       </View>
 
       {/* 顶部栏已经让开了状态栏,这里只需要底部(无底部栏)和横屏左右 */}
-      <Screen edges={['bottom', 'left', 'right']}>
+      <Screen
+        edges={['bottom', 'left', 'right']}
+        refreshing={refreshing}
+        onRefresh={forceRefresh}>
         {taskError && (
           <ErrorBar
             message={total > 0 ? `${taskError},当前显示上次内容` : taskError}

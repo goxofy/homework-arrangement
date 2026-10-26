@@ -15,6 +15,7 @@ import {
   Easing,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -62,6 +63,8 @@ export function Screen({
   scroll = true,
   center = false,
   edges = [],
+  refreshing = false,
+  onRefresh,
 }: {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
@@ -69,6 +72,9 @@ export function Screen({
   center?: boolean;
   /** 本页需要避让的安全区边(顶部有固定栏的页面通常只填 bottom/left/right) */
   edges?: readonly ScreenEdge[];
+  /** 下拉刷新是受控状态,只在 scroll=true 且提供 onRefresh 时生效 */
+  refreshing?: boolean;
+  onRefresh?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const keyboardInset = useKeyboardInset();
@@ -148,6 +154,16 @@ export function Screen({
         offsetRef.current = e.nativeEvent.contentOffset.y;
       }}
       scrollEventThrottle={32}
+      refreshControl={
+        onRefresh ? (
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        ) : undefined
+      }
       // iOS:原生自动把聚焦的输入框滚到键盘上方
       automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
       showsVerticalScrollIndicator={false}>
@@ -344,6 +360,8 @@ export function TopBarAction({
   );
 }
 
+const DATE_DOUBLE_TAP_MS = 320;
+
 /**
  * 周导航(家长端和儿童端共用):
  * 上一周 / 下一周 + 本周七天的按钮(周一到周日)。
@@ -362,9 +380,20 @@ export function WeekNav({
   const today = todayStr();
   const weekStart = startOfWeek(date);
   const weekDays = [0, 1, 2, 3, 4, 5, 6].map((i) => addDays(weekStart, i));
+  const lastDateTapRef = useRef(0);
 
-  const goWeek = (delta: number) => {
+  const goWeek = (delta: number): void => {
     onChange(addDays(date, delta * 7));
+  };
+
+  const handleDateCenterPress = (): void => {
+    const now = Date.now();
+    if (now - lastDateTapRef.current <= DATE_DOUBLE_TAP_MS) {
+      lastDateTapRef.current = 0;
+      onChange(today);
+      return;
+    }
+    lastDateTapRef.current = now;
   };
 
   return (
@@ -373,14 +402,19 @@ export function WeekNav({
         <Pressable style={styles.navBtn} onPress={() => goWeek(-1)} hitSlop={8}>
           <Text style={styles.navBtnText}>‹ 上一周</Text>
         </Pressable>
-        <View style={styles.dateCenter}>
+        <Pressable
+          style={styles.dateCenter}
+          onPress={handleDateCenterPress}
+          accessibilityRole="button"
+          accessibilityLabel={`${displayDate(date)},双击返回今天`}
+          accessibilityHint="连续点两次可快速切回今天">
           <Text style={styles.dateTitle} numberOfLines={1}>
             {weekRangeLabel(weekStart)}
           </Text>
           <Text style={styles.dateSub} numberOfLines={1}>
             {isToday(date) ? `今天 · ${displayDate(date)}` : displayDate(date)}
           </Text>
-        </View>
+        </Pressable>
         <Pressable style={styles.navBtn} hitSlop={8} onPress={() => goWeek(1)}>
           <Text style={styles.navBtnText}>下一周 ›</Text>
         </Pressable>

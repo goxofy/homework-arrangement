@@ -11,7 +11,6 @@
     "expo-build-properties": "~57.0.20",
     "expo-file-system": "~57.0.7",
     "expo-image-picker": "~57.0.19",
-    "expo-speech-recognition": "^57.1.0",
     "expo-status-bar": "~57.0.1",
     "expo-video": "~57.0.4",
     "react": "19.2.3",

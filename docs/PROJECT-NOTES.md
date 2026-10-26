@@ -72,7 +72,7 @@
 | 家长在**手机**上布置,孩子在**iPad** 上看 | 双端形态、双端布局差异(家长端密集录入、儿童端大字号) |
 | 家里不是每个人都有 Apple ID / 账号体系太麻烦 | **无账号系统**:家长定一个 ≥8 位房间号,双方输同一个号即关联 |
 | 孩子小,打不了字 | 儿童端**只读 + 勾选完成**,没有编辑/删除入口 |
-| 家长输入量大 | **文字录入为主**,语音说话**转文字**(可修改后保存),而不是直接存语音当内容 |
+| 家长输入作业需要稳定、可编辑 | **文字录入为主**;移除系统语音转文字,语音仅作为可选讲解附件 |
 | 教科书面每天固定几科 | **分组持续生效**:分组配置一次,后续每天沿用,全 App 只有一个分组入口 |
 | 要用很多年 | 数据落在**自己家的服务器**,不依赖任何云服务账号与付费 |
 | 家里的服务器很弱(树莓派级) | 服务端零原生依赖、SQLite 单文件、附件串行上传、下载并发上限 2 |
@@ -85,7 +85,7 @@
 |---|---|---|
 | **无账号,房间号即凭据** | 家庭成员不需要注册流程;房间号本身就是访问凭证,别人猜不到即可 | 账号体系(对"家里人用"是纯负担)、邀请链接(需要额外的分发通道) |
 | **家长端 / 儿童端两个界面,而非一套带权限的界面** | 孩子只需要"看 + 打勾",把编辑入口藏起来比做权限判断更简单也更不会被误触 | 单界面按角色隐藏按钮(仍会露出编辑态、误触风险高) |
-| **文字为主,语音只做"转文字"辅助** | 语音识别结果可修改后保存 → 作业内容是稳定的文本,列表/详情/搜索都简单;而不是存一段语音让孩子听 | 直接录音当内容(孩子每次都要听,家长也不便修改) |
+| **作业正文只用文字输入** | 输入路径更直接,也不再申请系统语音识别权限;需要口头说明时录成附件即可 | 系统语音转文字(已移除,入口占空间且不是主要使用方式) |
 | **任务行压成单行紧凑 + 详情弹层看全文** | 一屏要能看到当天所有作业(真机实测:两行布局一屏只有 5–6 条,不够) | 多行自动换行(一屏装不下)、点进二级页面(打断浏览) |
 | **周导航(上/下周 + 周一到周日七按钮)** | 家长布置是"按周"思考的;有作业的日子带小圆点,一眼看清那周情况 | 按天左右翻页(要翻 7 次才能看到下周一) |
 | **不用 RN 的 `Modal`,自研树内 `Overlay`** | `Modal` 渲染进独立原生窗口,`SafeAreaView` 拿到的 insets 为 0,二级页面顶到状态栏、左上角按钮点不到(详见 6.1) | 继续用 `Modal` + 硬编码 padding(换设备/横屏就崩) |
@@ -100,14 +100,13 @@
 ### 3.1 客户端:Expo(而非裸 RN / Flutter)
 
 - **Expo SDK 57 + `expo prebuild`**:CI 上一条 `npx expo prebuild --platform ios` 就能生成可归档的原生工程,不需要在仓库里维护 `ios/`、`android/` 目录(两者都在 `.gitignore` 里)。
-- **原生模块是刚需,因此不能用 Expo Go**:`expo-speech-recognition`(系统语音识别)、`expo-audio`(录音)、`expo-image-picker`(相册)、`expo-video`(播放)、`expo-file-system`(附件上传/缓存)。README 里明确写了"不能用 Expo Go 运行"。
+- **原生模块与原生配置是刚需**:`expo-audio`(录音)、`expo-image-picker`(相册)、`expo-video`(历史视频播放)、`expo-file-system`(附件上传/缓存),以及 Android 构建配置插件;Expo Go 不能覆盖完整验证。
 - **`AGENTS.md` 里钉死了版本化文档**:`Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before writing any code` —— Expo 大版本间 API 变化大(`expo-file-system` 新旧两套 API 并存就是例子),避免按记忆写代码。
 
 依赖清单(实际使用的部分):
 
 | 包 | 用途 |
 |---|---|
-| `expo-speech-recognition` | 语音转文字(iOS `SFSpeechRecognizer` / Android `SpeechRecognizer`) |
 | `expo-audio` | 录音(语音讲解附件) |
 | `expo-image-picker` | 相册多选图片(历史视频附件保留展示兼容) |
 | `expo-video` | 播放视频附件 |
@@ -156,7 +155,7 @@ src/storage.ts             AsyncStorage 持久化 + 类型定义 + 服务器地�
 src/dates.ts               本地时区日期工具(全程 YYYY-MM-DD)
 src/keyboard.ts            键盘避让高度(Android 15+ 必须自己算)
 src/display.tsx            显示偏好 Provider
-src/speech.ts              语音识别 hook
+src/task-groups.ts          家长/儿童端共用的任务分组逻辑
 src/theme.ts / theme 常量  颜色 / spacing(n)=n*8 / radius / 分组配色盘
 src/ServerField.tsx        服务器地址:行 + 点击弹出的输入层
 ```
@@ -425,8 +424,8 @@ App Store 的静态分析扫的是**链接进二进制的符号**,不管这个�
 另一条更彻底的路是**用 autolinking 把 `expo-file-system` 排除掉**,让二进制里根本没有相册符号,
 但那会动到 Expo 的资产加载路径 —— 为省一条字符串不值得,所以选了零风险的补声明。
 
-**顺带做的一次性排查**(避免再来第二轮同类报错):逐个 grep 了相机 / 定位 / 通讯录 / 日历 / 蓝牙 / 运动 / ATT / 健康 / 音乐库,
-**均无任何引用**;语音识别与麦克风两处声明早已存在。结论:只有相册这一个缺口。
+**当时顺带做的一次性排查**(避免再来第二轮同类报错):逐个 grep 了相机 / 定位 / 通讯录 / 日历 / 蓝牙 / 运动 / ATT / 健康 / 音乐库,
+**均无任何引用**;当时语音识别与麦克风声明都存在。后续移除语音转文字后,对应的语音识别用途声明也随依赖一起删除。
 
 > 附:`ITSAppUsesNonExemptEncryption = 0` 也已写入,上传后不用再回答出口合规问题。
 
@@ -727,8 +726,7 @@ ALTOOL=/Applications/Transporter.app/Contents/Frameworks/ContentDeliveryServices
 | 键 | 值(摘要) | 来源 |
 |---|---|---|
 | `NSPhotoLibraryUsageDescription` | 用于选择自己的作业照片/音视频作为附件;**仅供内置文件系统模块要求** | 我们的代码(`expo-image-picker`)+ 依赖符号(`expo-file-system`) |
-| `NSMicrophoneUsageDescription` | 录制语音作业(转文字或作语音讲解附件) | `expo-audio` / `expo-speech-recognition` |
-| `NSSpeechRecognitionUsageDescription` | 把说的话转成作业文字 | `expo-speech-recognition` |
+| `NSMicrophoneUsageDescription` | 录制作业语音讲解附件 | `expo-audio` |
 | `ITSAppUsesNonExemptEncryption` | `0`(false) | 出口合规,上传后不用再回答 |
 
 相机、定位、通讯录、日历、蓝牙、运动、ATT、健康、音乐库:**无任何引用,不需要声明**。
