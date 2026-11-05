@@ -294,20 +294,30 @@ export default function ParentHomeScreen({
         }}
       />
 
-      {/* 编辑作业弹层(仅文字修改) */}
+      {/* 编辑作业弹层:可修改文字/分组,也可继续追加图片、录音和文件 */}
       <AddTaskModal
         visible={!!editing}
         subjects={activeSubjects}
         date={date}
         title="编辑作业"
-        allowAttachments={false}
+        existingMediaCount={editing?.media?.length ?? 0}
         initial={editing ? { subject_id: editing.subject_id, content: editing.content } : undefined}
         onClose={() => setEditing(null)}
-        onSubmit={async (payload) => {
-          if (editing) {
-            await editTask(editing.id, { content: payload.content, subject_id: payload.subject_id }, date);
-          }
+        onSubmit={async (payload, onProgress) => {
+          if (!editing) return;
+          await editTask(editing.id, { content: payload.content, subject_id: payload.subject_id }, date);
+          const failed =
+            payload.files.length > 0
+              ? await uploadTaskMedia(editing.id, date, payload.files, onProgress)
+              : [];
+          resetUploadStaging();
           setEditing(null);
+          if (failed.length > 0) {
+            Alert.alert(
+              '作业修改已保存,但有附件没传上去',
+              `${failed.map((f) => `${f.name}:${f.reason}`).join('\n')}\n\n可以在作业详情里重新添加。`
+            );
+          }
         }}
       />
 
@@ -405,7 +415,7 @@ export function AddTaskModal({
   date,
   initial,
   title = '添加作业',
-  allowAttachments = true,
+  existingMediaCount = 0,
   onClose,
   onSubmit,
 }: {
@@ -414,7 +424,8 @@ export function AddTaskModal({
   date: string;
   initial?: { subject_id: string; content: string };
   title?: string;
-  allowAttachments?: boolean;
+  /** 已经存在于服务端的附件数量,用于计算本次还能追加多少个 */
+  existingMediaCount?: number;
   onClose: () => void;
   onSubmit: (
     payload: { date: string; subject_id: string; content: string; files: PendingAttachment[] },
@@ -429,6 +440,11 @@ export function AddTaskModal({
   const [uploading, setUploading] = useState<{ index: number; total: number; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const savedMediaCount = Number.isFinite(existingMediaCount)
+    ? Math.max(0, Math.floor(existingMediaCount))
+    : 0;
+  const maxNewMediaCount = Math.max(0, MAX_ATTACHMENTS_PER_TASK - savedMediaCount);
+  const remainingMediaSlots = Math.max(0, maxNewMediaCount - attachments.length);
 
   React.useEffect(() => {
     if (visible) {
@@ -452,7 +468,7 @@ export function AddTaskModal({
     setError(null);
     try {
       await onSubmit(
-        { date, subject_id: subjectId, content: content.trim(), files: allowAttachments ? attachments : [] },
+        { date, subject_id: subjectId, content: content.trim(), files: attachments },
         (index, total, name) => setUploading({ index, total, name })
       );
     } catch (e) {
@@ -516,28 +532,29 @@ export function AddTaskModal({
             placeholderTextColor={colors.textSub}
           />
 
-          {allowAttachments && (
-            <>
-              <Text style={[s.label, { fontSize: fs(14) }]}>图片 / 录音 / 文件(可选)</Text>
-              <AttachButtons
-                disabled={busy}
-                remainingSlots={MAX_ATTACHMENTS_PER_TASK - attachments.length}
-                onItems={(items) =>
-                  setAttachments((prev) => [...prev, ...items].slice(0, MAX_ATTACHMENTS_PER_TASK))
-                }
-              />
-              <PendingAttachmentList
-                items={attachments}
-                onRemove={(key) => setAttachments((prev) => prev.filter((a) => a.key !== key))}
-                uploadingIndex={busy && uploading && uploading.index < attachments.length ? uploading.index : null}
-              />
-              {attachments.length > 0 && (
-                <Text style={[s.hint, { fontSize: fs(11) }]}>
-                  附件会上传到你的服务器暂存(最多 7 天);孩子在有效期内打开这一天,就会自动下载到 iPad
-                  上长期保存。新增上传暂不支持视频。
-                </Text>
-              )}
-            </>
+          <Text style={[s.label, { fontSize: fs(14) }]}>图片 / 录音 / 文件(可选)</Text>
+          {savedMediaCount > 0 && (
+            <Text style={[s.hint, { fontSize: fs(11) }]}>
+              已有 {savedMediaCount} 个附件;可在作业详情中查看或删除,这里可以继续追加新附件。
+            </Text>
+          )}
+          <AttachButtons
+            disabled={busy}
+            remainingSlots={remainingMediaSlots}
+            onItems={(items) =>
+              setAttachments((prev) => [...prev, ...items].slice(0, maxNewMediaCount))
+            }
+          />
+          <PendingAttachmentList
+            items={attachments}
+            onRemove={(key) => setAttachments((prev) => prev.filter((a) => a.key !== key))}
+            uploadingIndex={busy && uploading && uploading.index < attachments.length ? uploading.index : null}
+          />
+          {attachments.length > 0 && (
+            <Text style={[s.hint, { fontSize: fs(11) }]}>
+              新附件会随本次保存上传到服务器暂存(最多 7 天);孩子在有效期内打开这一天,就会自动下载到
+              iPad 上长期保存。新增上传暂不支持视频。
+            </Text>
           )}
 
 
